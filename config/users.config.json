@@ -1,0 +1,13 @@
+{
+  "users": [
+    {
+      "userId": "demo_2",
+      "accessKey": "abcd423briewufewf",
+      "provider": {
+        "api_url": "https://ai.acmi.run/v1/chat/completions",
+        "api_key": "sk-2c5a68c61f14354cbee2dd832748ae0c6084623db18cd6b1a82ce7397e60c495",
+        "api_model": "gpt-5"
+      }
+    }
+  ]
+}
