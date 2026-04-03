@@ -753,7 +753,7 @@
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
             color: var(--text);
-            animation: modalPop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            animation: modalContentPop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
         .close {
@@ -1165,10 +1165,22 @@
             max-width: 420px !important;
             width: 90% !important;
             border: var(--glass-border) !important;
-            animation: modalPop 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+            animation: authModalPop 0.4s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
-        @keyframes modalPop {
+        @keyframes modalContentPop {
+            0% {
+                opacity: 0;
+                transform: translateY(12px) scale(0.96);
+            }
+
+            100% {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        @keyframes authModalPop {
             0% {
                 top: 52%;
                 opacity: 0;
