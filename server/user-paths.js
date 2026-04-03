@@ -37,9 +37,14 @@ function getUserChatDir(userId) {
   return path.join(getUserDataRoot(userId), 'chats');
 }
 
+function getUserPromptDir(userId) {
+  return path.join(getUserDataRoot(userId), 'prompts');
+}
+
 module.exports = {
   assertValidUserId,
   getUserDataRoot,
   getUserUploadDir,
-  getUserChatDir
+  getUserChatDir,
+  getUserPromptDir
 };

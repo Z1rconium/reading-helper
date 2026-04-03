@@ -1620,6 +1620,13 @@
             summaryOriginalParagraph = '';
         }
 
+        function resetPromptState() {
+            promptTemplateCache.clear();
+            promptFileList = [];
+            activePromptFileName = '';
+            closePromptManager();
+        }
+
         function isSummaryEvaluationPrompt(promptText) {
             const text = String(promptText || '');
             if (!text) return false;
@@ -1640,6 +1647,7 @@
         }
 
         async function checkAuthStatus() {
+            const previousUserId = currentUserId;
             try {
                 const response = await fetch('/api/auth/status', {
                     method: 'GET',
@@ -1649,7 +1657,11 @@
 
                 const data = await response.json();
                 const authenticated = !!data.authenticated;
-                currentUserId = authenticated && typeof data.userId === 'string' ? data.userId : '';
+                const nextUserId = authenticated && typeof data.userId === 'string' ? data.userId : '';
+                if (!authenticated || (previousUserId && previousUserId !== nextUserId)) {
+                    resetPromptState();
+                }
+                currentUserId = nextUserId;
                 if (authenticated) {
                     authModal.style.display = 'none';
                 } else {
@@ -1663,6 +1675,7 @@
                 return authenticated;
             } catch (error) {
                 console.error('检查登录状态失败:', error);
+                resetPromptState();
                 currentUserId = '';
                 showAuthModal();
                 return false;
@@ -1691,7 +1704,11 @@
                 if (!response.ok) throw new Error(`登录失败: ${response.status}`);
 
                 const data = await response.json();
-                currentUserId = typeof data.userId === 'string' ? data.userId : '';
+                const nextUserId = typeof data.userId === 'string' ? data.userId : '';
+                if (!nextUserId || currentUserId !== nextUserId) {
+                    resetPromptState();
+                }
+                currentUserId = nextUserId;
                 authError.style.display = 'none';
                 authModal.style.display = 'none';
                 logoutBtn.title = currentUserId ? `当前用户: ${currentUserId}` : '退出';
@@ -1720,11 +1737,8 @@
             currentConversationId = '';
             creatingConversationPromise = null;
             resetSummaryEvaluationState();
-            promptTemplateCache.clear();
-            promptFileList = [];
-            activePromptFileName = '';
             logoutBtn.title = '退出';
-            closePromptManager();
+            resetPromptState();
             fileNameDisplay.textContent = '未选择文件';
             textContent.innerHTML = defaultTextContentHtml;
             clearChatPanel();
@@ -1826,7 +1840,8 @@
         }
 
         async function fetchPromptFileList() {
-            const response = await fetch('/api/prompts', {
+            const userId = await ensurePromptUserId();
+            const response = await fetch(`/api/prompts?userId=${encodeURIComponent(userId)}`, {
                 method: 'GET',
                 credentials: 'include'
             });
@@ -1858,7 +1873,8 @@
                 return promptTemplateCache.get(fileName);
             }
 
-            const response = await fetch(`/api/prompts/${encodeURIComponent(fileName)}`, {
+            const userId = await ensurePromptUserId();
+            const response = await fetch(`/api/prompts/${encodeURIComponent(fileName)}?userId=${encodeURIComponent(userId)}`, {
                 method: 'GET',
                 credentials: 'include'
             });
@@ -1884,11 +1900,12 @@
         }
 
         async function savePromptFileContent(fileName, content) {
+            const userId = await ensurePromptUserId();
             const response = await fetch(`/api/prompts/${encodeURIComponent(fileName)}`, {
                 method: 'PUT',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content })
+                body: JSON.stringify({ userId, content })
             });
 
             if (response.status === 401) {
@@ -1917,6 +1934,19 @@
                 }
                 return match;
             });
+        }
+
+        async function ensurePromptUserId() {
+            if (currentUserId) {
+                return currentUserId;
+            }
+
+            await checkAuthStatus();
+            if (!currentUserId) {
+                throw new Error('请先登录后再操作提示词');
+            }
+
+            return currentUserId;
         }
 
         async function buildSystemPrompt(fileName, variables = {}) {

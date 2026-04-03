@@ -9,7 +9,7 @@
 - 在浏览器中阅读文章，结合选词、选句、选段进行 AI 交互
 - 支持 Chat Completions 和 OpenAI Responses API 两种上游接口格式，自动判断
 - 按文章维度管理多个独立对话，每条对话单独持久化为 JSON 文件
-- 在 `config/prompts/` 中管理系统提示词模板，可通过页面内入口编辑
+- 在 `data/users/<userId>/prompts/` 中按用户管理系统提示词，并以 `config/prompts/` 作为默认模板源
 - 通过 `/api/ai/chat/stream` 以 SSE 流式转发 AI 响应，按用户独立使用各自的 provider 配置
 
 ## 技术栈
@@ -27,7 +27,7 @@
 ├── config/
 │   ├── platform.config.json        # 平台配置（session secret）
 │   ├── users.config.json           # 用户列表与 AI provider 配置
-│   └── prompts/                    # 系统提示词模板（.md 文件）
+│   └── prompts/                    # 默认系统提示词模板（.md 文件）
 │       ├── analyze-sentence.md
 │       ├── color-sentence.md
 │       ├── explain-word.md
@@ -43,6 +43,7 @@
 │   └── users/
 │       └── <userId>/
 │           ├── uploads/            # 用户上传的文本文件
+│           ├── prompts/            # 用户自己的提示词副本
 │           └── chats/
 │               └── <articleBase64>/
 │                   └── <uuid>.json # 每个对话独立存储
@@ -120,7 +121,7 @@ npm install
 
 ### 提示词模板
 
-提示词位于 `config/prompts/`，均为 `.md` 文件，可在前端"修改系统提示词"入口中读取和编辑：
+`config/prompts/` 保存默认提示词模板。每个用户首次访问提示词接口时，系统会将默认模板复制到 `data/users/<userId>/prompts/`；之后用户在前端"修改系统提示词"中的编辑只会影响自己的副本：
 
 | 文件名 | 用途 |
 |--------|------|
@@ -221,7 +222,8 @@ sudo systemctl enable --now reading-helper
 - 上传的文章存储在 `data/users/<userId>/uploads/`
 - 对话历史存储在 `data/users/<userId>/chats/<articleBase64url>/` 目录下，每条对话对应一个 `<uuid>.json` 文件
 - 旧版本使用单 JSON 文件存储所有对话，首次访问时会自动迁移到新格式
-- 提示词模板存储在 `config/prompts/`
+- 默认提示词模板存储在 `config/prompts/`
+- 用户编辑后的提示词存储在 `data/users/<userId>/prompts/`
 
 删除文章时，服务端会一并删除该用户下该文章关联的所有对话数据。
 
@@ -250,9 +252,9 @@ sudo systemctl enable --now reading-helper
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/api/prompts` | 列出所有提示词文件名 |
-| `GET` | `/api/prompts/:name` | 读取提示词内容 |
-| `PUT` | `/api/prompts/:name` | 更新提示词，请求体: `{ "content": "..." }` |
+| `GET` | `/api/prompts?userId=<userId>` | 列出当前用户可编辑的提示词文件名 |
+| `GET` | `/api/prompts/:name?userId=<userId>` | 读取当前用户的提示词内容 |
+| `PUT` | `/api/prompts/:name` | 更新当前用户提示词，请求体: `{ "userId": "...", "content": "..." }` |
 
 ### 对话历史
 

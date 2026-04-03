@@ -27,6 +27,7 @@ const {
   deleteConversation,
   deleteArticleChatStore
 } = require('./chat-store');
+const { assertValidUserId } = require('./user-paths');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -37,6 +38,49 @@ function requireAuth(req, res, next) {
     return next();
   }
   return res.status(401).json({ error: 'Unauthorized' });
+}
+
+function getSessionUserId(req) {
+  return typeof req.session?.userId === 'string' ? req.session.userId.trim() : '';
+}
+
+function getRequestedUserId(req) {
+  const bodyUserId = typeof req.body?.userId === 'string' ? req.body.userId.trim() : '';
+  const queryUserId = typeof req.query?.userId === 'string' ? req.query.userId.trim() : '';
+  return {
+    bodyUserId,
+    queryUserId,
+    requestedUserId: bodyUserId || queryUserId
+  };
+}
+
+function validateRequestedUserId(req, res) {
+  const sessionUserId = getSessionUserId(req);
+  const { bodyUserId, queryUserId, requestedUserId } = getRequestedUserId(req);
+
+  if (bodyUserId && queryUserId && bodyUserId !== queryUserId) {
+    res.status(400).json({ error: 'userId 参数不一致' });
+    return '';
+  }
+
+  if (!requestedUserId) {
+    res.status(400).json({ error: 'userId 不能为空' });
+    return '';
+  }
+
+  try {
+    assertValidUserId(requestedUserId);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+    return '';
+  }
+
+  if (requestedUserId !== sessionUserId) {
+    res.status(403).json({ error: '无权访问其他用户的数据' });
+    return '';
+  }
+
+  return requestedUserId;
 }
 
 function buildUserMaps(users) {
@@ -321,8 +365,11 @@ async function bootstrap() {
   });
 
   app.get('/api/prompts', requireAuth, async (req, res) => {
+    const userId = validateRequestedUserId(req, res);
+    if (!userId) return;
+
     try {
-      const prompts = await listPromptFiles();
+      const prompts = await listPromptFiles(userId);
       return res.json({ prompts });
     } catch (error) {
       return respondPromptStoreError(res, error);
@@ -331,8 +378,11 @@ async function bootstrap() {
 
   app.get('/api/prompts/:name', requireAuth, async (req, res) => {
     const { name } = req.params;
+    const userId = validateRequestedUserId(req, res);
+    if (!userId) return;
+
     try {
-      const content = await readPromptFile(name);
+      const content = await readPromptFile(userId, name);
       return res.json({ name, content });
     } catch (error) {
       return respondPromptStoreError(res, error);
@@ -342,9 +392,11 @@ async function bootstrap() {
   app.put('/api/prompts/:name', requireAuth, async (req, res) => {
     const { name } = req.params;
     const content = req.body?.content;
+    const userId = validateRequestedUserId(req, res);
+    if (!userId) return;
 
     try {
-      const saved = await writePromptFile(name, content);
+      const saved = await writePromptFile(userId, name, content);
       return res.json({ ok: true, prompt: saved });
     } catch (error) {
       return respondPromptStoreError(res, error);

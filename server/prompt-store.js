@@ -1,11 +1,13 @@
+const { constants: fsConstants } = require('fs');
 const fs = require('fs/promises');
 const path = require('path');
 
 const { getConfigDir } = require('./config-loader');
+const { getUserPromptDir } = require('./user-paths');
 
 const MAX_PROMPT_NAME_LENGTH = 128;
 
-function getPromptDir() {
+function getDefaultPromptDir() {
   return path.join(getConfigDir(), 'prompts');
 }
 
@@ -26,13 +28,44 @@ function assertValidPromptName(fileName) {
 }
 
 async function ensurePromptDir() {
-  const promptDir = getPromptDir();
+  const promptDir = getDefaultPromptDir();
   await fs.mkdir(promptDir, { recursive: true });
   return promptDir;
 }
 
-async function listPromptFiles() {
-  const promptDir = await ensurePromptDir();
+async function ensureUserPromptDir(userId) {
+  const promptDir = getUserPromptDir(userId);
+  await fs.mkdir(promptDir, { recursive: true });
+  return promptDir;
+}
+
+async function syncDefaultPrompts(userId) {
+  const promptDir = await ensureUserPromptDir(userId);
+  const defaultPromptDir = await ensurePromptDir();
+  const entries = await fs.readdir(defaultPromptDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!isValidPromptName(entry.name)) continue;
+
+    const sourcePath = path.join(defaultPromptDir, entry.name);
+    const targetPath = path.join(promptDir, entry.name);
+
+    try {
+      await fs.copyFile(sourcePath, targetPath, fsConstants.COPYFILE_EXCL);
+    } catch (error) {
+      if (error && error.code === 'EEXIST') {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return promptDir;
+}
+
+async function listPromptFiles(userId) {
+  const promptDir = await syncDefaultPrompts(userId);
   const entries = await fs.readdir(promptDir, { withFileTypes: true });
 
   const files = [];
@@ -54,9 +87,9 @@ async function listPromptFiles() {
   return files;
 }
 
-async function readPromptFile(fileName) {
+async function readPromptFile(userId, fileName) {
   assertValidPromptName(fileName);
-  const promptDir = await ensurePromptDir();
+  const promptDir = await syncDefaultPrompts(userId);
   const filePath = path.join(promptDir, fileName);
 
   try {
@@ -71,7 +104,7 @@ async function readPromptFile(fileName) {
   }
 }
 
-async function writePromptFile(fileName, content) {
+async function writePromptFile(userId, fileName, content) {
   assertValidPromptName(fileName);
 
   if (typeof content !== 'string') {
@@ -80,7 +113,7 @@ async function writePromptFile(fileName, content) {
     throw error;
   }
 
-  const promptDir = await ensurePromptDir();
+  const promptDir = await syncDefaultPrompts(userId);
   const filePath = path.join(promptDir, fileName);
 
   try {
