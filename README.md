@@ -11,6 +11,7 @@
 - 按文章维度管理多个独立对话，每条对话单独持久化为 JSON 文件
 - 在 `data/users/<userId>/prompts/` 中按用户管理系统提示词，并以 `config/prompts/` 作为默认模板源
 - 通过 `/api/ai/chat/stream` 以 SSE 流式转发 AI 响应，按用户独立使用各自的 provider 配置
+- 提示词接口要求显式传递 `userId`，并且与当前 Session 用户一致
 
 ## 技术栈
 
@@ -207,6 +208,34 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now reading-helper
 ```
 
+## 通过 GitHub 更新部署
+
+若 `/opt/reading-helper` 是 Git 仓库，直接拉取最新代码：
+
+```bash
+cd /opt/reading-helper
+sudo git pull --ff-only
+sudo npm install
+sudo systemctl restart reading-helper
+```
+
+若 `/opt/reading-helper` 不是 Git 仓库，可用“重新克隆 + 保留配置和数据”的方式更新：
+
+```bash
+sudo systemctl stop reading-helper
+sudo mkdir -p /opt/reading-helper-backup
+sudo rsync -a /opt/reading-helper/config /opt/reading-helper/data /opt/reading-helper-backup/
+sudo rm -rf /opt/reading-helper-tmp
+sudo git clone https://github.com/Z1rconium/reading-helper /opt/reading-helper-tmp
+sudo rsync -a /opt/reading-helper-backup/config/ /opt/reading-helper-tmp/config/
+sudo rsync -a /opt/reading-helper-backup/data/ /opt/reading-helper-tmp/data/
+sudo mv /opt/reading-helper /opt/reading-helper.old
+sudo mv /opt/reading-helper-tmp /opt/reading-helper
+cd /opt/reading-helper
+sudo npm install
+sudo systemctl start reading-helper
+```
+
 ## 使用流程
 
 1. 启动服务，打开浏览器访问 `http://localhost:3000`
@@ -255,6 +284,8 @@ sudo systemctl enable --now reading-helper
 | `GET` | `/api/prompts?userId=<userId>` | 列出当前用户可编辑的提示词文件名 |
 | `GET` | `/api/prompts/:name?userId=<userId>` | 读取当前用户的提示词内容 |
 | `PUT` | `/api/prompts/:name` | 更新当前用户提示词，请求体: `{ "userId": "...", "content": "..." }` |
+
+> 说明：提示词接口会校验 `userId` 与当前登录 Session 的 `userId` 一致，否则返回 `403`。
 
 ### 对话历史
 
