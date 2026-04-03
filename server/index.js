@@ -28,6 +28,7 @@ const {
   deleteArticleChatStore
 } = require('./chat-store');
 const { assertValidUserId } = require('./user-paths');
+const { createSessionStore } = require('./session-store');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -278,6 +279,7 @@ async function bootstrap() {
   const platformConfig = await loadPlatformConfig();
   const users = await loadUsersConfig();
   const { usersByAccessKey, usersById } = buildUserMaps(users);
+  const sessionStore = await createSessionStore();
 
   app.use(cors({ origin: true, credentials: true }));
   app.use(express.json({ limit: '1mb' }));
@@ -285,6 +287,7 @@ async function bootstrap() {
 
   app.use(
     session({
+      store: sessionStore,
       name: 'reading_helper_sid',
       secret: platformConfig.session_secret,
       resave: false,

@@ -12,9 +12,11 @@
     "node": ">=18"
   },
   "dependencies": {
+    "connect-sqlite3": "^0.9.16",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "express-session": "^1.18.1",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^1.4.5-lts.1",
+    "sqlite3": "^6.0.1"
   }
 }

@@ -25,6 +25,18 @@ function getDataRoot() {
   return DEFAULT_DATA_ROOT;
 }
 
+function getRuntimeDataRoot() {
+  return path.dirname(getDataRoot());
+}
+
+function getSessionStoreDir() {
+  if (process.env.SESSION_STORE_DIR) {
+    return process.env.SESSION_STORE_DIR;
+  }
+
+  return path.join(getRuntimeDataRoot(), 'sessions');
+}
+
 function getUserDataRoot(userId) {
   return path.join(getDataRoot(), assertValidUserId(userId));
 }
@@ -43,6 +55,9 @@ function getUserPromptDir(userId) {
 
 module.exports = {
   assertValidUserId,
+  getDataRoot,
+  getRuntimeDataRoot,
+  getSessionStoreDir,
   getUserDataRoot,
   getUserUploadDir,
   getUserChatDir,
