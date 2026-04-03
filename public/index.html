@@ -737,11 +737,13 @@
             background-color: rgba(15, 23, 42, 0.6);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
+            align-items: flex-start;
+            justify-content: center;
+            padding-top: 8vh;
         }
 
         .modal-content {
             background: var(--panel);
-            margin: 8% auto;
             padding: 24px;
             border: var(--glass-border);
             width: 84%;
@@ -1594,7 +1596,7 @@
 
         function showAuthModal() {
             accessKeyInput.value = '';
-            authModal.style.display = 'block';
+            authModal.style.display = 'flex';
         }
 
         function resetDeletedFileView(deletedFileName) {
@@ -2237,7 +2239,7 @@
                 hideChatHistoryContextMenu();
                 const conversations = await listChatConversations(currentFileName);
                 renderChatHistoryList(conversations);
-                chatHistoryModal.style.display = 'block';
+                chatHistoryModal.style.display = 'flex';
             } catch (error) {
                 addSystemMessage(`读取历史记录失败: ${error.message}`);
             }
@@ -2330,7 +2332,7 @@
                 await fetchPromptFileList();
                 renderPromptList();
                 showPromptListPanel();
-                promptManagerModal.style.display = 'block';
+                promptManagerModal.style.display = 'flex';
             } catch (error) {
                 addSystemMessage(`读取提示词列表失败: ${error.message}`);
             }
@@ -3897,11 +3899,13 @@
             background-color: rgba(15, 23, 42, 0.6);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
+            align-items: flex-start;
+            justify-content: center;
+            padding-top: 8vh;
         }
 
         .modal-content {
             background: var(--panel);
-            margin: 8% auto;
             padding: 24px;
             border: var(--glass-border);
             width: 84%;
@@ -5154,11 +5158,13 @@
             background-color: rgba(15, 23, 42, 0.6);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
+            align-items: flex-start;
+            justify-content: center;
+            padding-top: 8vh;
         }
 
         .modal-content {
             background: var(--panel);
-            margin: 8% auto;
             padding: 24px;
             border: var(--glass-border);
             width: 84%;
