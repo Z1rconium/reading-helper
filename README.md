@@ -135,6 +135,8 @@ npm install
 }
 ```
 
+注意：当前服务端请求头统一使用 `Authorization: Bearer <api_key>`。如果要**直连 Anthropic 官方 API**，还需要 `x-api-key` 与 `anthropic-version` 等请求头（目前未内置），请改造 `server/index.js` 或使用兼容 Bearer 认证的代理网关。
+
 ### 提示词模板
 
 `config/prompts/` 保存默认提示词模板。每个用户首次访问提示词接口时，系统会将默认模板复制到 `data/users/<userId>/prompts/`；之后用户在前端"修改系统提示词"中的编辑只会影响自己的副本：
