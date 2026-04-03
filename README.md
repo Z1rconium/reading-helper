@@ -117,8 +117,23 @@ npm install
 
 **上游 API 格式自动判断：**
 
+- 若 `api_url` 包含 `anthropic` 或路径包含 `/messages` → 按 **Anthropic Messages API** 结构发请求（`system` 字段 + `messages` 数组）
 - 若 `api_url` 路径以 `/responses` 结尾 → 按 **OpenAI Responses API** 结构发请求（`instructions` + `input` 字段）
 - 否则 → 按 **Chat Completions** 风格发请求（`messages` 数组）
+
+#### Anthropic API 配置示例
+
+```json
+{
+  "userId": "user_with_claude",
+  "accessKey": "your_access_key",
+  "provider": {
+    "api_url": "https://api.anthropic.com/v1/messages",
+    "api_key": "sk-ant-api03-...",
+    "api_model": "claude-3-5-sonnet-20241022"
+  }
+}
+```
 
 ### 提示词模板
 

@@ -107,10 +107,35 @@ function isResponsesApi(apiUrl) {
   }
 }
 
+function isAnthropicApi(apiUrl) {
+  try {
+    const url = new URL(apiUrl);
+    return url.hostname.includes('anthropic') || url.pathname.includes('/messages');
+  } catch {
+    return apiUrl.includes('anthropic') || apiUrl.includes('/messages');
+  }
+}
+
 function buildUpstreamRequestBody(providerConfig, systemPrompt, userPrompt) {
   const effectiveSystemPrompt = typeof systemPrompt === 'string' && systemPrompt.trim()
     ? systemPrompt.trim()
     : DEFAULT_SYSTEM_PROMPT;
+
+  if (isAnthropicApi(providerConfig.api_url)) {
+    return {
+      model: providerConfig.api_model,
+      max_tokens: 2000,
+      system: effectiveSystemPrompt,
+      messages: [
+        {
+          role: 'user',
+          content: userPrompt
+        }
+      ],
+      temperature: 0.3,
+      stream: true
+    };
+  }
 
   if (isResponsesApi(providerConfig.api_url)) {
     return {
@@ -146,6 +171,10 @@ function getUpstreamError(parsed) {
     return '';
   }
 
+  if (parsed.type === 'error' && parsed.error) {
+    return parsed.error.message || JSON.stringify(parsed.error);
+  }
+
   if (typeof parsed.error === 'string') {
     return parsed.error;
   }
@@ -164,6 +193,10 @@ function getUpstreamError(parsed) {
 function getUpstreamDelta(parsed) {
   if (!parsed || typeof parsed !== 'object') {
     return '';
+  }
+
+  if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+    return parsed.delta.text || '';
   }
 
   const responseApiDelta = parsed.type === 'response.output_text.delta' ? parsed.delta : '';
@@ -201,6 +234,8 @@ function relayUpstreamChunk(chunk, res) {
       continue;
     }
 
+    console.log('[DEBUG] Parsed SSE event:', JSON.stringify(parsed));
+
     const errorMessage = getUpstreamError(parsed);
     if (errorMessage) {
       sendSseChunk(res, { error: errorMessage });
@@ -208,6 +243,7 @@ function relayUpstreamChunk(chunk, res) {
     }
 
     const delta = getUpstreamDelta(parsed);
+    console.log('[DEBUG] Extracted delta:', delta);
     if (delta) {
       sendSseChunk(res, { delta });
     }
