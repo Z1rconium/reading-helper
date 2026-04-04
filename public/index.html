@@ -4631,26 +4631,80 @@
             return undefined;
         }
 
+        function pickFirstDeepValue(source, keys, seen = new Set()) {
+            if (source === undefined || source === null) return undefined;
+
+            const parsedSource = typeof source === 'string' ? tryParseStructuredValue(source) : null;
+            if (parsedSource) {
+                return pickFirstDeepValue(parsedSource, keys, seen);
+            }
+
+            if (typeof source !== 'object') return undefined;
+            if (seen.has(source)) return undefined;
+            seen.add(source);
+
+            for (const key of keys) {
+                if (source[key] !== undefined && source[key] !== null) {
+                    return source[key];
+                }
+            }
+
+            if (Array.isArray(source)) {
+                for (const item of source) {
+                    const nested = pickFirstDeepValue(item, keys, seen);
+                    if (nested !== undefined) {
+                        return nested;
+                    }
+                }
+                return undefined;
+            }
+
+            for (const value of Object.values(source)) {
+                const nested = pickFirstDeepValue(value, keys, seen);
+                if (nested !== undefined) {
+                    return nested;
+                }
+            }
+
+            return undefined;
+        }
+
         function normalizeScalarValue(value) {
             if (value === undefined || value === null) return '';
             if (typeof value === 'string') return value.trim();
             if (typeof value === 'number') return String(value);
             if (typeof value === 'boolean') return value ? 'true' : 'false';
             if (Array.isArray(value)) {
-                return value.length ? normalizeScalarValue(value[0]) : '';
+                return value
+                    .map((item) => normalizeScalarValue(item))
+                    .filter(Boolean)
+                    .join('\n\n');
             }
             if (typeof value === 'object') {
                 return normalizeScalarValue(
                     pickFirstValue(value, [
                         'answer',
+                        'answers',
                         'correct_answer',
                         'correctAnswer',
                         'reference_answer',
                         'referenceAnswer',
+                        'reference_answers',
+                        'referenceAnswers',
                         'sample_answer',
                         'sampleAnswer',
+                        'sample_answers',
+                        'sampleAnswers',
                         'model_answer',
                         'modelAnswer',
+                        'model_answers',
+                        'modelAnswers',
+                        'ideal_answer',
+                        'idealAnswer',
+                        'expected_answer',
+                        'expectedAnswer',
+                        'suggested_answer',
+                        'suggestedAnswer',
                         'option',
                         'label',
                         'key',
@@ -4733,6 +4787,12 @@
                 'mcqs',
                 'qa',
                 'quiz',
+                'statements',
+                'true_false_statements',
+                'trueFalseStatements',
+                'true_false_items',
+                'trueFalseItems',
+                'judgments',
                 'multiple_choice_questions',
                 'multipleChoiceQuestions',
                 'true_false_questions',
@@ -4754,6 +4814,20 @@
                     if (nestedItems.length) {
                         return nestedItems;
                     }
+                }
+            }
+
+            const arrayValues = Object.values(normalized).filter(Array.isArray);
+            for (const candidate of arrayValues) {
+                const questionLikeItems = candidate.filter((item) => {
+                    if (!item || typeof item !== 'object') {
+                        return false;
+                    }
+                    const text = normalizeQuestionText(item);
+                    return Boolean(text);
+                });
+                if (questionLikeItems.length) {
+                    return questionLikeItems;
                 }
             }
 
@@ -4864,7 +4938,7 @@
 
         function normalizeQuizAnswer(question, options) {
             const rawAnswer = normalizeScalarValue(
-                pickFirstValue(question, [
+                pickFirstDeepValue(question, [
                     'answer',
                     'correct_answer',
                     'correctAnswer',
@@ -4902,31 +4976,45 @@
 
         function normalizeQuestionText(question) {
             return normalizeScalarValue(
-                pickFirstValue(question, ['question', 'prompt', 'stem', 'statement', 'sentence', 'text', 'content'])
+                pickFirstDeepValue(question, ['question', 'prompt', 'stem', 'statement', 'sentence', 'text', 'content'])
             );
         }
 
         function normalizeQuestionAnswer(question) {
             return normalizeScalarValue(
-                pickFirstValue(question, [
+                pickFirstDeepValue(question, [
                     'answer',
+                    'answers',
                     'reference_answer',
                     'referenceAnswer',
+                    'reference_answers',
+                    'referenceAnswers',
                     'sample_answer',
                     'sampleAnswer',
+                    'sample_answers',
+                    'sampleAnswers',
                     'model_answer',
                     'modelAnswer',
+                    'model_answers',
+                    'modelAnswers',
+                    'ideal_answer',
+                    'idealAnswer',
+                    'expected_answer',
+                    'expectedAnswer',
                     'correct_answer',
                     'correctAnswer',
                     'suggested_answer',
                     'suggestedAnswer',
-                    'explanation'
+                    'explanation',
+                    'explanations',
+                    'solution',
+                    'solutions'
                 ])
             );
         }
 
         function normalizeQuestionId(question, index) {
-            const rawId = normalizeScalarValue(pickFirstValue(question, ['id', 'number', 'index']));
+            const rawId = normalizeScalarValue(pickFirstDeepValue(question, ['id', 'number', 'index']));
             return rawId || String(index + 1);
         }
 
