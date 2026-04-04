@@ -187,7 +187,7 @@ http://localhost:3000
 |------|--------|------|
 | `PORT` | `3000` | 服务监听端口 |
 | `CONFIG_DIR` | `./config` | 配置目录路径 |
-| `USER_DATA_ROOT` | `./data/users` | 用户数据根目录 |
+| `USER_DATA_ROOT` | `./data/users` | 用户数据根目录；若未设置，则默认解析为 `process.cwd()/data/users` |
 | `DATA_DIR` | — | 兼容旧参数；设置后将以其父目录 + `/users` 推导用户数据根目录 |
 | `MAX_UPLOAD_BYTES` | `2097152`（2 MB） | 单次上传文件大小上限 |
 
@@ -224,6 +224,13 @@ sudo cp reading-helper.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now reading-helper
 ```
+
+说明：
+
+- `WorkingDirectory` 必须是实际存在的项目目录；若目录不存在，systemd 会在启动前报 `status=200/CHDIR`
+- `ExecStart` 中的 Node.js 路径也必须按服务器实际安装位置填写，常见为 `/usr/bin/node`
+- 若显式设置了 `USER_DATA_ROOT`，上传文章、对话记录、提示词副本都会保存到该目录下
+- 若未设置 `USER_DATA_ROOT`，则默认保存到 `WorkingDirectory/data/users/`
 
 ## 通过 GitHub 更新部署
 
@@ -265,11 +272,12 @@ sudo systemctl start reading-helper
 
 ## 数据存储说明
 
-- 上传的文章存储在 `data/users/<userId>/uploads/`
-- 对话历史存储在 `data/users/<userId>/chats/<articleBase64url>/` 目录下，每条对话对应一个 `<uuid>.json` 文件
+- 用户数据根目录优先取环境变量 `USER_DATA_ROOT`；若未设置，则默认为当前工作目录下的 `data/users/`
+- 上传的文章存储在 `<USER_DATA_ROOT>/<userId>/uploads/`
+- 对话历史存储在 `<USER_DATA_ROOT>/<userId>/chats/<articleBase64url>/` 目录下，每条对话对应一个 `<uuid>.json` 文件
 - 旧版本使用单 JSON 文件存储所有对话，首次访问时会自动迁移到新格式
 - 默认提示词模板存储在 `config/prompts/`
-- 用户编辑后的提示词存储在 `data/users/<userId>/prompts/`
+- 用户编辑后的提示词存储在 `<USER_DATA_ROOT>/<userId>/prompts/`
 
 删除文章时，服务端会一并删除该用户下该文章关联的所有对话数据。
 

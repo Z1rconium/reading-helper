@@ -29,6 +29,7 @@ const {
 } = require('./chat-store');
 const { assertValidUserId } = require('./user-paths');
 const { createSessionStore } = require('./session-store');
+const { cleanupOrphanedUsers } = require('./cleanup-orphaned-users');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -115,6 +116,23 @@ function isAnthropicApi(apiUrl) {
   } catch {
     return apiUrl.includes('anthropic') || apiUrl.includes('/messages');
   }
+}
+
+function buildUpstreamHeaders(providerConfig) {
+  const headers = {
+    Accept: 'text/event-stream',
+    'Content-Type': 'application/json'
+  };
+
+  if (isAnthropicApi(providerConfig.api_url)) {
+    headers.Authorization = `Bearer ${providerConfig.api_key}`;
+    headers['x-api-key'] = providerConfig.api_key;
+    headers['anthropic-version'] = '2023-06-01';
+    return headers;
+  }
+
+  headers.Authorization = `Bearer ${providerConfig.api_key}`;
+  return headers;
 }
 
 function buildUpstreamRequestBody(providerConfig, systemPrompt, userPrompt) {
@@ -280,6 +298,10 @@ async function bootstrap() {
   const users = await loadUsersConfig();
   const { usersByAccessKey, usersById } = buildUserMaps(users);
   const sessionStore = await createSessionStore();
+
+  // 清理不在配置文件中的用户数据
+  const validUserIds = users.map((user) => user.userId);
+  await cleanupOrphanedUsers(validUserIds);
 
   app.use(cors({ origin: true, credentials: true }));
   app.use(express.json({ limit: '1mb' }));
@@ -556,11 +578,7 @@ async function bootstrap() {
     try {
       const upstreamResponse = await fetch(providerConfig.api_url, {
         method: 'POST',
-        headers: {
-          Accept: 'text/event-stream',
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${providerConfig.api_key}`
-        },
+        headers: buildUpstreamHeaders(providerConfig),
         body: JSON.stringify(buildUpstreamRequestBody(providerConfig, systemPrompt, prompt))
       });
 
