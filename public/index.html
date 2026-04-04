@@ -840,7 +840,7 @@
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
-            gap: 16px;
+            gap: 12px;
             padding: 22px 22px 18px;
             border-bottom: 1px solid var(--border);
             background: transparent;
@@ -848,7 +848,7 @@
 
         .chat-header-actions {
             display: flex;
-            gap: 10px;
+            gap: 8px;
             align-items: center;
             flex-wrap: wrap;
             justify-content: flex-end;
@@ -859,7 +859,7 @@
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            padding: 9px 12px;
+            padding: 8px 11px;
             border: 1px solid var(--border);
             border-radius: 999px;
             background-color: var(--btn-bg);
@@ -912,7 +912,9 @@
         .cancel-btn {
             background-color: var(--btn-bg);
             color: var(--text);
-            padding: 10px 12px;
+            padding: 8px 11px;
+            font-size: 13px;
+            white-space: nowrap;
         }
 
         .chat-messages {
@@ -2915,8 +2917,8 @@
             return currentUserId;
         }
 
-        async function buildSystemPrompt(fileName, variables = {}) {
-            const template = await fetchPromptFileContent(fileName);
+        async function buildSystemPrompt(fileName, variables = {}, forceRefresh = false) {
+            const template = await fetchPromptFileContent(fileName, forceRefresh);
             return fillPromptTemplate(template, variables).trim();
         }
 
@@ -3577,13 +3579,22 @@
             }
         });
 
-        async function callFeaturePrompt(fileName, variables, userPrompt, loadingText, operation) {
-            const systemPrompt = await buildSystemPrompt(fileName, variables);
+        async function callFeaturePrompt(fileName, variables, userPrompt, loadingText, operation, forceRefresh = false) {
+            const systemPrompt = await buildSystemPrompt(fileName, variables, forceRefresh);
             if (!systemPrompt) {
                 throw new Error(`提示词为空: ${fileName}`);
             }
             const loadingMessage = simulateAIResponse(loadingText);
             await callAIApi(systemPrompt, userPrompt, loadingMessage, operation);
+        }
+
+        function buildArticleQuestionUserPrompt(instruction, passageContent, currentFileName) {
+            return [
+                instruction,
+                `Article title: ${currentFileName || 'Untitled Article'}`,
+                'Article content:',
+                passageContent
+            ].join('\n\n');
         }
 
         // 解释单词
@@ -3849,9 +3860,14 @@
                 await callFeaturePrompt(
                     PROMPT_FILES.qa,
                     { passageContent, currentFileName, currentFileContent },
-                    `文章内容：\n${passageContent}`,
+                    buildArticleQuestionUserPrompt(
+                        'Please generate 10 open-ended questions based on the article content below and follow the required JSON output format.',
+                        passageContent,
+                        currentFileName
+                    ),
                     '正在生成开放性问题...',
-                    'questions'
+                    'questions',
+                    true
                 );
             } catch (error) {
                 addSystemMessage(`调用全文问答题失败: ${error.message}`);
@@ -3868,9 +3884,14 @@
                 await callFeaturePrompt(
                     PROMPT_FILES.mcq,
                     { passageContent, currentFileName, currentFileContent },
-                    `文章内容：\n${passageContent}`,
+                    buildArticleQuestionUserPrompt(
+                        'Please generate 10 multiple choice questions based on the article content below and follow the required JSON output format.',
+                        passageContent,
+                        currentFileName
+                    ),
                     '正在生成多项选择题...',
-                    'mcqs'
+                    'mcqs',
+                    true
                 );
             } catch (error) {
                 addSystemMessage(`调用全文选择题失败: ${error.message}`);
@@ -3887,9 +3908,14 @@
                 await callFeaturePrompt(
                     PROMPT_FILES.tf,
                     { passageContent, currentFileName, currentFileContent },
-                    `文章内容：\n${passageContent}`,
+                    buildArticleQuestionUserPrompt(
+                        'Please generate 10 true/false questions based on the article content below and follow the required JSON output format.',
+                        passageContent,
+                        currentFileName
+                    ),
                     '正在生成正误判断题...',
-                    'mcqs'
+                    'tf',
+                    true
                 );
             } catch (error) {
                 addSystemMessage(`调用全文判断题失败: ${error.message}`);
@@ -4075,8 +4101,8 @@
             return '';
         }
 
-        function renderAIResponse(messageElement, message, operation) {
-            messageElement.innerHTML = markdownToHtml(message, operation);
+        function renderAIResponse(messageElement, message, operation, isFinal = false) {
+            messageElement.innerHTML = markdownToHtml(message, operation, isFinal);
             messageElement.classList.remove('loading');
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
@@ -4147,7 +4173,7 @@
                             const content = extractStreamContent(data);
                             if (content) {
                                 accumulatedText += content;
-                                renderAIResponse(streamingDiv, accumulatedText, operation);
+                                renderAIResponse(streamingDiv, accumulatedText, operation, false);
                             }
                         }
                     }
@@ -4173,7 +4199,7 @@
                             accumulatedText += content;
                         }
                     }
-                    renderAIResponse(streamingDiv, accumulatedText, operation);
+                    renderAIResponse(streamingDiv, accumulatedText, operation, true);
                 }
 
                 if (!accumulatedText.trim()) {
@@ -4185,8 +4211,10 @@
                     cursorElement.remove();
                 }
 
+                renderAIResponse(streamingDiv, accumulatedText, operation, true);
+
                 chatMessages.scrollTop = chatMessages.scrollHeight;
-                saveInteraction('assistant', markdownToHtml(accumulatedText, operation)).catch((error) => {
+                saveInteraction('assistant', markdownToHtml(accumulatedText, operation, true)).catch((error) => {
                     console.error('保存助手消息失败:', error);
                     addSystemMessage(`保存对话失败: ${error.message}`);
                 });
@@ -4443,6 +4471,94 @@
             return match ? match[1].trim() : '';
         }
 
+        function findBalancedJsonCandidate(text, startIndex) {
+            const input = String(text || '');
+            const openingChar = input[startIndex];
+            const closingChar = openingChar === '{' ? '}' : ']';
+            let depth = 0;
+            let inString = false;
+            let escaping = false;
+
+            for (let i = startIndex; i < input.length; i += 1) {
+                const char = input[i];
+
+                if (inString) {
+                    if (escaping) {
+                        escaping = false;
+                    } else if (char === '\\') {
+                        escaping = true;
+                    } else if (char === '"') {
+                        inString = false;
+                    }
+                    continue;
+                }
+
+                if (char === '"') {
+                    inString = true;
+                    continue;
+                }
+
+                if (char === openingChar) {
+                    depth += 1;
+                    continue;
+                }
+
+                if (char === closingChar) {
+                    depth -= 1;
+                    if (depth === 0) {
+                        return input.slice(startIndex, i + 1).trim();
+                    }
+                    continue;
+                }
+
+                if ((openingChar === '{' && char === ']') || (openingChar === '[' && char === '}')) {
+                    return '';
+                }
+            }
+
+            return '';
+        }
+
+        function extractBalancedJsonPayload(markdown) {
+            const input = String(markdown || '');
+            const candidates = [];
+
+            for (let i = 0; i < input.length; i += 1) {
+                const char = input[i];
+                if (char !== '{' && char !== '[') {
+                    continue;
+                }
+
+                const candidate = findBalancedJsonCandidate(input, i);
+                if (!candidate) {
+                    continue;
+                }
+
+                try {
+                    const parsed = JSON.parse(candidate);
+                    candidates.push({ json: candidate, data: parsed });
+                } catch (error) {
+                    // Continue searching; earlier braces may belong to prose/code examples.
+                }
+            }
+
+            // Prefer JSON objects that contain "questions" field (for quiz/question operations)
+            for (const item of candidates) {
+                if (item.data && item.data.questions && Array.isArray(item.data.questions)) {
+                    console.log('[JSON Extract] Found questions JSON, length:', item.json.length);
+                    return item.json;
+                }
+            }
+
+            // Fall back to first valid JSON found
+            if (candidates.length > 0) {
+                console.log('[JSON Extract] Balanced JSON found, length:', candidates[0].json.length);
+                return candidates[0].json;
+            }
+
+            return '';
+        }
+
         function extractJsonPayload(markdown) {
             const fenced = extractFencedBlock(markdown, 'json');
             if (fenced) {
@@ -4454,6 +4570,11 @@
             if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
                 console.log('[JSON Extract] Direct JSON found, length:', trimmed.length);
                 return trimmed;
+            }
+
+            const balanced = extractBalancedJsonPayload(trimmed);
+            if (balanced) {
+                return balanced;
             }
             console.log('[JSON Extract] No JSON found in markdown');
             return '';
@@ -4482,9 +4603,361 @@
             }
         }
 
-        function buildQuizHtml(data, currentFileName) {
-            const questions = Array.isArray(data?.questions) ? data.questions : [];
+        function renderQuestionLoadingHtml() {
+            return '<p class="rh-empty">正在生成题目中......</p>';
+        }
+
+        function tryParseStructuredValue(value) {
+            if (typeof value !== 'string') return null;
+            const trimmed = value.trim();
+            if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
+                return null;
+            }
+
+            try {
+                return JSON.parse(trimmed);
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function pickFirstValue(source, keys) {
+            if (!source || typeof source !== 'object') return undefined;
+            for (const key of keys) {
+                if (source[key] !== undefined && source[key] !== null) {
+                    return source[key];
+                }
+            }
+            return undefined;
+        }
+
+        function normalizeScalarValue(value) {
+            if (value === undefined || value === null) return '';
+            if (typeof value === 'string') return value.trim();
+            if (typeof value === 'number') return String(value);
+            if (typeof value === 'boolean') return value ? 'true' : 'false';
+            if (Array.isArray(value)) {
+                return value.length ? normalizeScalarValue(value[0]) : '';
+            }
+            if (typeof value === 'object') {
+                return normalizeScalarValue(
+                    pickFirstValue(value, [
+                        'answer',
+                        'correct_answer',
+                        'correctAnswer',
+                        'reference_answer',
+                        'referenceAnswer',
+                        'sample_answer',
+                        'sampleAnswer',
+                        'model_answer',
+                        'modelAnswer',
+                        'option',
+                        'label',
+                        'key',
+                        'id',
+                        'value',
+                        'content',
+                        'text'
+                    ])
+                );
+            }
+            return String(value).trim();
+        }
+
+        function unwrapStructuredData(data) {
+            let current = data;
+            const seen = new Set();
+
+            while (current && typeof current === 'object' && !Array.isArray(current) && !seen.has(current)) {
+                seen.add(current);
+
+                const directArray = pickFirstValue(current, [
+                    'questions',
+                    'items',
+                    'results',
+                    'mcqs',
+                    'qa',
+                    'quiz',
+                    'data',
+                    'payload',
+                    'response',
+                    'result',
+                    'output',
+                    'multiple_choice_questions',
+                    'multipleChoiceQuestions',
+                    'true_false_questions',
+                    'trueFalseQuestions',
+                    'open_questions',
+                    'openEndedQuestions'
+                ]);
+                if (Array.isArray(directArray)) {
+                    return directArray;
+                }
+
+                const nestedCandidate = pickFirstValue(current, [
+                    'data',
+                    'payload',
+                    'response',
+                    'result',
+                    'output',
+                    'content'
+                ]);
+                const parsedNested = tryParseStructuredValue(nestedCandidate);
+                if (parsedNested) {
+                    current = parsedNested;
+                    continue;
+                }
+                if (nestedCandidate && typeof nestedCandidate === 'object') {
+                    current = nestedCandidate;
+                    continue;
+                }
+                break;
+            }
+
+            return current;
+        }
+
+        function extractQuestionItems(data) {
+            const normalized = unwrapStructuredData(data);
+            if (Array.isArray(normalized)) {
+                return normalized;
+            }
+            if (!normalized || typeof normalized !== 'object') {
+                return [];
+            }
+
+            const arrayKeys = [
+                'questions',
+                'items',
+                'results',
+                'mcqs',
+                'qa',
+                'quiz',
+                'multiple_choice_questions',
+                'multipleChoiceQuestions',
+                'true_false_questions',
+                'trueFalseQuestions',
+                'open_questions',
+                'openEndedQuestions'
+            ];
+            for (const key of arrayKeys) {
+                const candidate = normalized[key];
+                if (Array.isArray(candidate)) {
+                    return candidate;
+                }
+                const parsedCandidate = tryParseStructuredValue(candidate);
+                if (Array.isArray(parsedCandidate)) {
+                    return parsedCandidate;
+                }
+                if (parsedCandidate && typeof parsedCandidate === 'object') {
+                    const nestedItems = extractQuestionItems(parsedCandidate);
+                    if (nestedItems.length) {
+                        return nestedItems;
+                    }
+                }
+            }
+
+            const objectValues = Object.values(normalized).filter(
+                (value) => value && typeof value === 'object' && !Array.isArray(value)
+            );
+            const questionLikeValues = objectValues.filter((item) => {
+                const text = normalizeScalarValue(
+                    pickFirstValue(item, ['question', 'prompt', 'stem', 'statement', 'sentence', 'text', 'content'])
+                );
+                return Boolean(text);
+            });
+            return questionLikeValues;
+        }
+
+        function getOptionLetter(index) {
+            return String.fromCharCode(65 + index);
+        }
+
+        function normalizeOptionItem(option, index) {
+            if (typeof option === 'string') {
+                return {
+                    option: getOptionLetter(index),
+                    content: option
+                };
+            }
+            if (!option || typeof option !== 'object') {
+                return null;
+            }
+
+            const entries = Object.entries(option).filter(([, value]) => value !== undefined && value !== null);
+            if (
+                !('option' in option) &&
+                !('label' in option) &&
+                !('key' in option) &&
+                !('id' in option) &&
+                entries.length === 1
+            ) {
+                const [entryKey, entryValue] = entries[0];
+                return {
+                    option: normalizeScalarValue(entryKey) || getOptionLetter(index),
+                    content: normalizeScalarValue(entryValue)
+                };
+            }
+
+            const optionKey = normalizeScalarValue(
+                pickFirstValue(option, ['option', 'label', 'key', 'id'])
+            ) || getOptionLetter(index);
+            const optionText = normalizeScalarValue(
+                pickFirstValue(option, [
+                    'content',
+                    'text',
+                    'option_text',
+                    'optionText',
+                    'answer_text',
+                    'answerText',
+                    'description',
+                    'value',
+                    'label'
+                ])
+            );
+
+            return {
+                option: optionKey,
+                content: optionText
+            };
+        }
+
+        function normalizeOptions(question) {
+            const rawOptions = pickFirstValue(question, [
+                'options',
+                'choices',
+                'answers',
+                'candidates',
+                'selections',
+                'alternatives'
+            ]);
+
+            if (Array.isArray(rawOptions)) {
+                return rawOptions
+                    .map((option, index) => normalizeOptionItem(option, index))
+                    .filter((option) => option && option.content);
+            }
+
+            if (rawOptions && typeof rawOptions === 'object') {
+                return Object.entries(rawOptions)
+                    .map(([key, value], index) => normalizeOptionItem({ option: key, content: value }, index))
+                    .filter((option) => option && option.content);
+            }
+
+            return [];
+        }
+
+        function looksLikeTrueFalse(question, options, answer) {
+            const typeHint = normalizeScalarValue(pickFirstValue(question, ['type', 'question_type', 'questionType'])).toLowerCase();
+            if (typeHint.includes('true') || typeHint.includes('false') || typeHint === 'tf') {
+                return true;
+            }
+            if (options.length === 2) {
+                const optionTexts = options.map((option) => option.content.toLowerCase());
+                if (optionTexts.includes('true') && optionTexts.includes('false')) {
+                    return true;
+                }
+            }
+            const normalizedAnswer = String(answer || '').trim().toUpperCase();
+            return ['A', 'B', 'TRUE', 'FALSE', 'T', 'F'].includes(normalizedAnswer);
+        }
+
+        function normalizeQuizAnswer(question, options) {
+            const rawAnswer = normalizeScalarValue(
+                pickFirstValue(question, [
+                    'answer',
+                    'correct_answer',
+                    'correctAnswer',
+                    'reference_answer',
+                    'referenceAnswer',
+                    'solution',
+                    'correct_option',
+                    'correctOption'
+                ])
+            );
+            if (!rawAnswer) {
+                return '';
+            }
+
+            const upperAnswer = rawAnswer.toUpperCase();
+            if (upperAnswer === 'TRUE' || upperAnswer === 'T') {
+                return 'A';
+            }
+            if (upperAnswer === 'FALSE' || upperAnswer === 'F') {
+                return 'B';
+            }
+
+            const optionByKey = options.find((option) => option.option.toUpperCase() === upperAnswer);
+            if (optionByKey) {
+                return optionByKey.option;
+            }
+
+            const optionByText = options.find((option) => option.content.toLowerCase() === rawAnswer.toLowerCase());
+            if (optionByText) {
+                return optionByText.option;
+            }
+
+            return rawAnswer;
+        }
+
+        function normalizeQuestionText(question) {
+            return normalizeScalarValue(
+                pickFirstValue(question, ['question', 'prompt', 'stem', 'statement', 'sentence', 'text', 'content'])
+            );
+        }
+
+        function normalizeQuestionAnswer(question) {
+            return normalizeScalarValue(
+                pickFirstValue(question, [
+                    'answer',
+                    'reference_answer',
+                    'referenceAnswer',
+                    'sample_answer',
+                    'sampleAnswer',
+                    'model_answer',
+                    'modelAnswer',
+                    'correct_answer',
+                    'correctAnswer',
+                    'suggested_answer',
+                    'suggestedAnswer',
+                    'explanation'
+                ])
+            );
+        }
+
+        function normalizeQuestionId(question, index) {
+            const rawId = normalizeScalarValue(pickFirstValue(question, ['id', 'number', 'index']));
+            return rawId || String(index + 1);
+        }
+
+        function buildQuizHtml(data, currentFileName, quizType = 'mcq', isFinal = false) {
+            const rawQuestions = extractQuestionItems(data);
+            const questions = rawQuestions.map((question, index) => {
+                const normalizedQuestion = question && typeof question === 'object'
+                    ? question
+                    : { question: normalizeScalarValue(question) };
+                let options = normalizeOptions(normalizedQuestion);
+                const provisionalAnswer = normalizeQuizAnswer(normalizedQuestion, options);
+
+                if (!options.length && (quizType === 'tf' || looksLikeTrueFalse(normalizedQuestion, options, provisionalAnswer))) {
+                    options = [
+                        { option: 'A', content: 'True' },
+                        { option: 'B', content: 'False' }
+                    ];
+                }
+
+                return {
+                    id: normalizeQuestionId(normalizedQuestion, index),
+                    question: normalizeQuestionText(normalizedQuestion),
+                    options,
+                    answer: normalizeQuizAnswer(normalizedQuestion, options)
+                };
+            }).filter((question) => question.question);
+
             if (!questions.length) {
+                if (!isFinal) {
+                    return renderQuestionLoadingHtml();
+                }
                 return '<p class="rh-empty">没有找到题目数据。</p>';
             }
 
@@ -4517,9 +4990,23 @@
             </div>`;
         }
 
-        function buildQuestionListHtml(data, currentFileName) {
-            const questions = Array.isArray(data?.questions) ? data.questions : [];
+        function buildQuestionListHtml(data, currentFileName, isFinal = false) {
+            const rawQuestions = extractQuestionItems(data);
+            const questions = rawQuestions.map((question, index) => {
+                const normalizedQuestion = question && typeof question === 'object'
+                    ? question
+                    : { question: normalizeScalarValue(question) };
+                return {
+                    id: normalizeQuestionId(normalizedQuestion, index),
+                    question: normalizeQuestionText(normalizedQuestion),
+                    answer: normalizeQuestionAnswer(normalizedQuestion)
+                };
+            }).filter((question) => question.question);
+
             if (!questions.length) {
+                if (!isFinal) {
+                    return renderQuestionLoadingHtml();
+                }
                 return '<p class="rh-empty">没有找到问答题数据。</p>';
             }
 
@@ -4548,7 +5035,7 @@
             return `${body}${tipHtml}`;
         }
 
-        function markdownToHtml(markdown, operation) {
+        function markdownToHtml(markdown, operation, isFinal = false) {
             const currentFileName = document.getElementById('file-name').textContent;
             if (operation === 'mindmap') {
                 return buildMindmapMessageHtml(markdown);
@@ -4556,18 +5043,35 @@
             } else if (operation === 'mcqs') {
                 const parsed = parseJsonContent(markdown);
                 if (!parsed) {
+                    if (!isFinal) {
+                        return renderQuestionLoadingHtml();
+                    }
                     return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
                 }
                 console.log('[MCQ] JSON parsed successfully');
-                const quizHtml = buildQuizHtml(parsed.data, currentFileName);
+                const quizHtml = buildQuizHtml(parsed.data, currentFileName, 'mcq', isFinal);
+                return quizHtml;
+            } else if (operation === 'tf') {
+                const parsed = parseJsonContent(markdown);
+                if (!parsed) {
+                    if (!isFinal) {
+                        return renderQuestionLoadingHtml();
+                    }
+                    return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
+                }
+                console.log('[TF] JSON parsed successfully');
+                const quizHtml = buildQuizHtml(parsed.data, currentFileName, 'tf', isFinal);
                 return quizHtml;
             } else if (operation === 'questions') {
                 const parsed = parseJsonContent(markdown);
                 if (!parsed) {
+                    if (!isFinal) {
+                        return renderQuestionLoadingHtml();
+                    }
                     return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
                 }
                 console.log('[Questions] JSON parsed successfully');
-                const questionHtml = buildQuestionListHtml(parsed.data, currentFileName);
+                const questionHtml = buildQuestionListHtml(parsed.data, currentFileName, isFinal);
                 return questionHtml;
             } else if (operation === 'structure') {
                 const data = extractJsonPayload(markdown);
