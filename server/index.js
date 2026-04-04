@@ -214,15 +214,18 @@ function getUpstreamDelta(parsed) {
     return '';
   }
 
+  // Anthropic format: content_block_delta
   if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
     return parsed.delta.text || '';
   }
 
+  // OpenAI Responses API format
   const responseApiDelta = parsed.type === 'response.output_text.delta' ? parsed.delta : '';
   if (typeof responseApiDelta === 'string' && responseApiDelta) {
     return responseApiDelta;
   }
 
+  // OpenAI Chat Completions format
   const chatDelta = parsed?.choices?.[0]?.delta?.content;
   if (typeof chatDelta === 'string') {
     return chatDelta;
@@ -249,11 +252,9 @@ function relayUpstreamChunk(chunk, res) {
     let parsed;
     try {
       parsed = JSON.parse(payload);
-    } catch {
+    } catch (parseError) {
       continue;
     }
-
-    console.log('[DEBUG] Parsed SSE event:', JSON.stringify(parsed));
 
     const errorMessage = getUpstreamError(parsed);
     if (errorMessage) {
@@ -262,7 +263,6 @@ function relayUpstreamChunk(chunk, res) {
     }
 
     const delta = getUpstreamDelta(parsed);
-    console.log('[DEBUG] Extracted delta:', delta);
     if (delta) {
       sendSseChunk(res, { delta });
     }
@@ -576,10 +576,12 @@ async function bootstrap() {
     res.flushHeaders?.();
 
     try {
+      const requestBody = buildUpstreamRequestBody(providerConfig, systemPrompt, prompt);
+
       const upstreamResponse = await fetch(providerConfig.api_url, {
         method: 'POST',
         headers: buildUpstreamHeaders(providerConfig),
-        body: JSON.stringify(buildUpstreamRequestBody(providerConfig, systemPrompt, prompt))
+        body: JSON.stringify(requestBody)
       });
 
       if (!upstreamResponse.ok || !upstreamResponse.body) {
@@ -609,10 +611,13 @@ async function bootstrap() {
       if (buffer.trim() !== '') {
         relayUpstreamChunk(buffer, res);
       }
+      console.log('[DEBUG] ========== Stream Complete ==========');
 
       res.write('data: [DONE]\n\n');
       return res.end();
     } catch (error) {
+      console.log('[DEBUG] Stream Error:', error.message);
+      console.log('[DEBUG] Error Stack:', error.stack);
       sendSseChunk(res, { error: error.message || '流式请求失败' });
       res.write('data: [DONE]\n\n');
       return res.end();

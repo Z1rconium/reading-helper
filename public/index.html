@@ -5074,10 +5074,11 @@
                 const normalizedQuestion = question && typeof question === 'object'
                     ? question
                     : { question: normalizeScalarValue(question) };
+                const answer = normalizeQuestionAnswer(normalizedQuestion);
                 return {
                     id: normalizeQuestionId(normalizedQuestion, index),
                     question: normalizeQuestionText(normalizedQuestion),
-                    answer: normalizeQuestionAnswer(normalizedQuestion)
+                    answer: answer
                 };
             }).filter((question) => question.question);
 
