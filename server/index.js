@@ -1,10 +1,11 @@
+const fs = require('fs/promises');
 const express = require('express');
 const session = require('express-session');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 
-const { loadPlatformConfig, loadUsersConfig } = require('./config-loader');
+const { loadPlatformConfig, loadUsersConfig, getConfigDir } = require('./config-loader');
 const {
   MAX_UPLOAD_BYTES,
   hasAllowedTextExtension,
@@ -240,6 +241,11 @@ function getUpstreamDelta(parsed) {
   return '';
 }
 
+async function readCetWordList() {
+  const filePath = path.join(getConfigDir(), 'cet_word_list.txt');
+  return fs.readFile(filePath, 'utf8');
+}
+
 function relayUpstreamChunk(chunk, res) {
   const lines = chunk.split('\n');
 
@@ -420,6 +426,18 @@ async function bootstrap() {
       }
       if (error.code === 'NOT_FOUND') {
         return res.status(404).json({ error: error.message });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/cet-word-list', requireAuth, async (req, res) => {
+    try {
+      const content = await readCetWordList();
+      return res.json({ content });
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return res.status(404).json({ error: '未找到 CET 词表文件' });
       }
       return res.status(500).json({ error: error.message });
     }

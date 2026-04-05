@@ -773,6 +773,18 @@
             box-shadow: 0 0 0 1px rgba(212, 106, 58, 0.16);
         }
 
+        .cet-word {
+            font-weight: 600;
+        }
+
+        .cet-4 {
+            color: #2166d1;
+        }
+
+        .cet-6 {
+            color: #c5392f;
+        }
+
         .action-toolbar {
             padding: 16px;
             background: rgba(255, 251, 246, 0.78);
@@ -2238,6 +2250,7 @@
                         <button id="translate-paragraph" type="button">翻译段落</button>
                         <select id="morefuncs" onchange="executeFunction()">
                             <option value="">更多</option>
+                            <option value="annotate-vocab">词汇标注</option>
                             <option value="mindmap">思维导图</option>
                             <option value="qa">全文问答题</option>
                             <option value="mcq">全文选择题</option>
@@ -2374,6 +2387,7 @@
 
         const textContent = document.getElementById('text-content');
         const actionButtons = document.getElementById('action-buttons');
+        const moreFuncsSelect = document.getElementById('morefuncs');
 
         const resizeHandle = document.getElementById('resize-handle');
 
@@ -2477,6 +2491,9 @@
         let creatingConversationPromise = null;
         let fontSize = 16; // 默认字体大小
         let currentUserId = '';
+        let isVocabAnnotationEnabled = false;
+        let cetWordLevelMap = null;
+        let cetWordListPromise = null;
 
         // 拖动调整面板宽度功能
         let isResizing = false;
@@ -2565,6 +2582,7 @@
             pContent = '';
             currentConversationId = '';
             creatingConversationPromise = null;
+            resetVocabAnnotationState();
             resetSummaryEvaluationState();
 
             fileNameDisplay.textContent = '未选择文件';
@@ -2694,6 +2712,7 @@
             currentFileContent = '';
             currentConversationId = '';
             creatingConversationPromise = null;
+            resetVocabAnnotationState();
             resetSummaryEvaluationState();
             logoutBtn.title = '退出';
             resetPromptState();
@@ -3084,17 +3103,135 @@
             });
         }
 
+        function buildArticleParagraphHtml(line, levelMap = null) {
+            const normalizedLine = String(line || '').trim().split(/\s+/).join(' ');
+            if (!normalizedLine) return '';
+
+            if (!(levelMap instanceof Map) || levelMap.size === 0) {
+                return `<p>${escapeHtml(normalizedLine)}</p>`;
+            }
+
+            let html = '';
+            let lastIndex = 0;
+            const wordPattern = /[A-Za-z]+/g;
+            let match = wordPattern.exec(normalizedLine);
+
+            while (match) {
+                const [word] = match;
+                const offset = match.index;
+                html += escapeHtml(normalizedLine.slice(lastIndex, offset));
+
+                const level = levelMap.get(word.toLowerCase());
+                if (level === 4 || level === 6) {
+                    html += `<span class="cet-word cet-${level}">${escapeHtml(word)}</span>`;
+                } else {
+                    html += escapeHtml(word);
+                }
+
+                lastIndex = offset + word.length;
+                match = wordPattern.exec(normalizedLine);
+            }
+
+            html += escapeHtml(normalizedLine.slice(lastIndex));
+            return `<p>${html}</p>`;
+        }
+
         function renderArticleContent(content) {
+            const levelMap = isVocabAnnotationEnabled ? cetWordLevelMap : null;
             textContent.innerHTML = String(content || '')
                 .split('\n')
-                .map((line) => {
-                    const line1 = line.trim();
-                    if (line1 === '') return '';
-                    const words = line1.split(/\s+/);
-                    const words1 = words.join(' ');
-                    return `<p>${words1}</p>`;
-                })
+                .map((line) => buildArticleParagraphHtml(line, levelMap))
                 .join('');
+        }
+
+        function parseCetWordList(content) {
+            const wordLevelMap = new Map();
+            let currentLevel = 0;
+
+            String(content || '')
+                .split(/\r?\n/)
+                .forEach((rawLine) => {
+                    const line = rawLine.trim().toLowerCase();
+                    if (!line) return;
+
+                    const levelMatch = line.match(/^([46])(.+)$/);
+                    if (levelMatch) {
+                        currentLevel = Number(levelMatch[1]);
+                        const baseWord = levelMatch[2].trim();
+                        if (baseWord) {
+                            wordLevelMap.set(baseWord, currentLevel);
+                        }
+                        return;
+                    }
+
+                    if (currentLevel === 4 || currentLevel === 6) {
+                        wordLevelMap.set(line, currentLevel);
+                    }
+                });
+
+            return wordLevelMap;
+        }
+
+        async function fetchCetWordList() {
+            if (cetWordLevelMap instanceof Map) {
+                return cetWordLevelMap;
+            }
+
+            if (!cetWordListPromise) {
+                cetWordListPromise = (async () => {
+                    const response = await fetch('/api/cet-word-list', {
+                        method: 'GET',
+                        credentials: 'include'
+                    });
+
+                    if (response.status === 401) {
+                        await checkAuthStatus();
+                        throw new Error('请先登录后再读取 CET 词表');
+                    }
+                    if (!response.ok) {
+                        let data = null;
+                        try {
+                            data = await response.json();
+                        } catch (error) {
+                            data = null;
+                        }
+                        throw new Error(data?.error || `读取 CET 词表失败: ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    cetWordLevelMap = parseCetWordList(data?.content || '');
+                    return cetWordLevelMap;
+                })().catch((error) => {
+                    cetWordListPromise = null;
+                    throw error;
+                });
+            }
+
+            return cetWordListPromise;
+        }
+
+        function resetVocabAnnotationState() {
+            isVocabAnnotationEnabled = false;
+            if (moreFuncsSelect) {
+                moreFuncsSelect.value = '';
+            }
+        }
+
+        async function toggleVocabAnnotation() {
+            if (!currentFileContent.trim()) {
+                addSystemMessage('请先选择一篇文章。');
+                return;
+            }
+
+            if (isVocabAnnotationEnabled) {
+                isVocabAnnotationEnabled = false;
+                renderArticleContent(currentFileContent);
+                return;
+            }
+
+            await fetchCetWordList();
+            isVocabAnnotationEnabled = true;
+            renderArticleContent(currentFileContent);
         }
 
         function renderConversationMessages(interactions) {
@@ -3458,6 +3595,7 @@
             currentFileName = fileName;
             currentConversationId = '';
             creatingConversationPromise = null;
+            resetVocabAnnotationState();
             resetSummaryEvaluationState();
 
             try {
@@ -5307,20 +5445,31 @@
         }
 
         function executeFunction() {
-            const selectedValue = document.querySelector('#morefuncs').value;
+            const selectedValue = moreFuncsSelect.value;
 
             switch (selectedValue) {
+                case 'annotate-vocab':
+                    toggleVocabAnnotation().catch((error) => {
+                        addSystemMessage(`词汇标注失败: ${error.message}`);
+                    }).finally(() => {
+                        moreFuncsSelect.value = '';
+                    });
+                    break;
                 case 'mindmap':
                     gen_mindmap();
+                    moreFuncsSelect.value = '';
                     break;
                 case 'qa':
                     gen_qa();
+                    moreFuncsSelect.value = '';
                     break;
                 case 'mcq':
                     gen_mcq();
+                    moreFuncsSelect.value = '';
                     break;
                 case 'tf':
                     gen_tf();
+                    moreFuncsSelect.value = '';
                     break;
             }
         }
