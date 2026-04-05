@@ -968,6 +968,10 @@
             color: var(--text-main);
         }
 
+        .system-message-error {
+            color: #d32f2f;
+        }
+
         .loading {
             color: var(--text-muted);
             font-style: italic;
@@ -2371,6 +2375,7 @@
     </div>
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/markmap-view@0.18.12/dist/browser/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
     <script>
         // DOM元素
         const container = document.querySelector('.container');
@@ -3245,7 +3250,7 @@
                     messageElement.textContent = interaction.content;
                 } else if (interaction.role === 'assistant') {
                     messageElement.className = 'message ai-message';
-                    messageElement.innerHTML = interaction.content;
+                    messageElement.innerHTML = sanitizeAssistantHtml(interaction.content);
                 } else {
                     return;
                 }
@@ -4151,7 +4156,10 @@
         function addSystemMessage(message) {
             const messageElement = document.createElement('div');
             messageElement.className = 'message ai-message';
-            messageElement.innerHTML = `<p style="color: #d32f2f;">${message}</p>`;
+            const text = document.createElement('p');
+            text.className = 'system-message-error';
+            text.textContent = String(message || '');
+            messageElement.appendChild(text);
             chatMessages.appendChild(messageElement);
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
@@ -4194,7 +4202,7 @@
 
             // 如果是Markdown内容，直接作为HTML插入
             if (message.includes('#')) {
-                messageElement.innerHTML = markdownToHtml(message, null);
+                messageElement.innerHTML = sanitizeAssistantHtml(markdownToHtml(message, null));
             } else {
                 messageElement.textContent = message;
             }
@@ -4204,7 +4212,7 @@
 
             // 保存互动内容
             if (message.includes('#')) {
-                saveInteraction('assistant', markdownToHtml(message, null)).catch((error) => {
+                saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(message, null))).catch((error) => {
                     console.error('保存助手消息失败:', error);
                     addSystemMessage(`保存对话失败: ${error.message}`);
                 });
@@ -4230,7 +4238,7 @@
         }
 
         function renderAIResponse(messageElement, message, operation, isFinal = false) {
-            messageElement.innerHTML = markdownToHtml(message, operation, isFinal);
+            messageElement.innerHTML = sanitizeAssistantHtml(markdownToHtml(message, operation, isFinal));
             messageElement.classList.remove('loading');
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
@@ -4342,7 +4350,7 @@
                 renderAIResponse(streamingDiv, accumulatedText, operation, true);
 
                 chatMessages.scrollTop = chatMessages.scrollHeight;
-                saveInteraction('assistant', markdownToHtml(accumulatedText, operation, true)).catch((error) => {
+                saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(accumulatedText, operation, true))).catch((error) => {
                     console.error('保存助手消息失败:', error);
                     addSystemMessage(`保存对话失败: ${error.message}`);
                 });
@@ -4384,6 +4392,28 @@
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
+        }
+
+        const ASSISTANT_SANITIZE_TAGS = [
+            'p', 'br', 'strong', 'em', 'code', 'pre', 'blockquote',
+            'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+            'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr',
+            'div', 'span', 'button', 'a'
+        ];
+        const ASSISTANT_SANITIZE_ATTR = [
+            'class', 'data-markdown', 'data-type', 'data-option', 'data-correct-answer',
+            'type', 'href', 'target', 'rel'
+        ];
+
+        function sanitizeAssistantHtml(html) {
+            const raw = String(html || '');
+            if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+                return window.DOMPurify.sanitize(raw, {
+                    ALLOWED_TAGS: ASSISTANT_SANITIZE_TAGS,
+                    ALLOWED_ATTR: ASSISTANT_SANITIZE_ATTR
+                });
+            }
+            return `<p>${escapeHtml(raw)}</p>`;
         }
 
         function encodeStructuredData(text) {

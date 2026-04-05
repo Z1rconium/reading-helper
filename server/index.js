@@ -1,6 +1,7 @@
 const fs = require('fs/promises');
 const express = require('express');
 const session = require('express-session');
+const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
@@ -35,6 +36,8 @@ const { cleanupOrphanedUsers } = require('./cleanup-orphaned-users');
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const DEFAULT_SYSTEM_PROMPT = '你是一位专业的英语老师，擅长用中文解释英语知识。';
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 5;
 
 function requireAuth(req, res, next) {
   if (req.session && req.session.authenticated && typeof req.session.userId === 'string' && req.session.userId) {
@@ -323,13 +326,25 @@ async function bootstrap() {
       cookie: {
         httpOnly: true,
         sameSite: 'lax',
-        secure: false,
+        secure: true,
         maxAge: 7 * 24 * 60 * 60 * 1000
       }
     })
   );
 
-  app.post('/api/auth/login', (req, res) => {
+  const loginRateLimiter = rateLimit({
+    windowMs: LOGIN_WINDOW_MS,
+    max: LOGIN_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    message: {
+      authenticated: false,
+      error: '登录尝试过于频繁，请稍后再试'
+    }
+  });
+
+  app.post('/api/auth/login', loginRateLimiter, (req, res) => {
     const inputKey = typeof req.body?.accessKey === 'string' ? req.body.accessKey.trim() : '';
     const user = inputKey ? usersByAccessKey.get(inputKey) : null;
 

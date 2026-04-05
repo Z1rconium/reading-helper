@@ -1,6 +1,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const sanitizeHtml = require('sanitize-html');
 const { getUserChatDir } = require('./user-paths');
 
 const ALLOWED_EXTENSIONS = new Set(['.txt', '.text']);
@@ -8,6 +9,19 @@ const CHAT_STORE_VERSION = 1;
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_CONVERSATION_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 200000;
+const SANITIZE_ALLOWED_TAGS = [
+  'p', 'br', 'strong', 'em', 'code', 'pre', 'blockquote',
+  'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr',
+  'div', 'span', 'button', 'a'
+];
+const SANITIZE_ALLOWED_ATTRIBUTES = {
+  '*': ['class'],
+  div: ['data-markdown', 'data-type', 'data-correct-answer'],
+  span: ['data-type'],
+  button: ['type', 'data-option'],
+  a: ['href', 'target', 'rel']
+};
 
 function hasAllowedTextExtension(fileName) {
   const ext = path.extname(String(fileName || '')).toLowerCase();
@@ -50,6 +64,25 @@ function normalizeTimestamp(value, fallback) {
     return fallback;
   }
   return date.toISOString();
+}
+
+function sanitizeAssistantHtml(content) {
+  return sanitizeHtml(String(content || ''), {
+    allowedTags: SANITIZE_ALLOWED_TAGS,
+    allowedAttributes: SANITIZE_ALLOWED_ATTRIBUTES,
+    allowedSchemes: ['http', 'https', 'mailto'],
+    disallowedTagsMode: 'discard'
+  });
+}
+
+function sanitizeInteraction(interaction) {
+  if (!interaction || typeof interaction !== 'object') return interaction;
+  if (interaction.role !== 'assistant') return interaction;
+
+  return {
+    ...interaction,
+    content: sanitizeAssistantHtml(interaction.content)
+  };
 }
 
 function getArticleSafeName(articleName) {
@@ -316,7 +349,7 @@ async function getConversation(userId, articleName, conversationId) {
     id: conversation.id,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
-    interactions: [...conversation.interactions]
+    interactions: conversation.interactions.map(sanitizeInteraction)
   };
 }
 
@@ -345,7 +378,9 @@ async function appendConversationMessage(userId, articleName, conversationId, ro
   const conversation = await readConversation(userId, articleName, conversationId);
   const interaction = {
     role: normalizedRole,
-    content: normalizedContent,
+    content: normalizedRole === 'assistant'
+      ? sanitizeAssistantHtml(normalizedContent)
+      : normalizedContent,
     timestamp: normalizeTimestamp(timestamp, new Date().toISOString())
   };
 
