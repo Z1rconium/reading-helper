@@ -1619,6 +1619,30 @@
             padding-top: 18px;
         }
 
+        .children.is-collapsed {
+            display: none;
+        }
+
+        .node.is-collapsible {
+            cursor: pointer;
+            padding-right: 32px;
+        }
+
+        .node.is-collapsible::after {
+            content: '▾';
+            position: absolute;
+            top: 50%;
+            right: 12px;
+            transform: translateY(-50%);
+            font-size: 13px;
+            opacity: 0.9;
+            transition: transform 0.2s ease;
+        }
+
+        .node.is-collapsible.is-collapsed::after {
+            transform: translateY(-50%) rotate(-90deg);
+        }
+
         .node::before {
             content: attr(data-type);
             position: absolute;
@@ -2482,6 +2506,17 @@
                 if (!answer) return;
                 const isVisible = answer.classList.toggle('is-visible');
                 toggleButton.textContent = isVisible ? 'Hide Answer' : 'Show Answer';
+                return;
+            }
+
+            const treeNode = event.target.closest('.tree .node.is-collapsible');
+            if (treeNode) {
+                const childrenContainer = treeNode.nextElementSibling;
+                if (!childrenContainer || !childrenContainer.classList.contains('children')) {
+                    return;
+                }
+                const isCollapsed = childrenContainer.classList.toggle('is-collapsed');
+                treeNode.classList.toggle('is-collapsed', isCollapsed);
             }
         });
 
@@ -2538,6 +2573,11 @@
         };
         const DEFAULT_CHAT_SYSTEM_PROMPT = '你是一位专业的英语老师。请回答学生关于英语学习的问题，要求：回答专业准确、重点清晰，并在需要时给出简短例子。';
         const MAX_ARTICLE_CONTEXT_CHARS = 12000;
+
+        function getCsrfToken() {
+            const match = document.cookie.match(/csrf_token=([^;]+)/);
+            return match ? match[1] : '';
+        }
 
         function hideFileContextMenu() {
             fileContextMenu.style.display = 'none';
@@ -2675,7 +2715,10 @@
                 const response = await fetch('/api/auth/login', {
                     method: 'POST',
                     credentials: 'include',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': getCsrfToken()
+                    },
                     body: JSON.stringify({ accessKey })
                 });
 
@@ -2706,7 +2749,10 @@
             try {
                 await fetch('/api/auth/logout', {
                     method: 'POST',
-                    credentials: 'include'
+                    credentials: 'include',
+                    headers: {
+                        'X-CSRF-Token': getCsrfToken()
+                    }
                 });
             } catch (error) {
                 console.error('退出失败:', error);
@@ -2762,6 +2808,9 @@
             const response = await fetch('/api/files/upload', {
                 method: 'POST',
                 credentials: 'include',
+                headers: {
+                    'X-CSRF-Token': getCsrfToken()
+                },
                 body: formData
             });
 
@@ -2802,7 +2851,10 @@
         async function deleteServerFile(fileName) {
             const response = await fetch(`/api/files/${encodeURIComponent(fileName)}`, {
                 method: 'DELETE',
-                credentials: 'include'
+                credentials: 'include',
+                headers: {
+                    'X-CSRF-Token': getCsrfToken()
+                }
             });
 
             if (response.status === 401) {
@@ -2887,7 +2939,10 @@
             const response = await fetch(`/api/prompts/${encodeURIComponent(fileName)}`, {
                 method: 'PUT',
                 credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': getCsrfToken()
+                },
                 body: JSON.stringify({ userId, content })
             });
 
@@ -2964,7 +3019,10 @@
         async function createChatConversation(fileName) {
             const response = await fetch(`/api/chats?fileName=${encodeURIComponent(fileName)}`, {
                 method: 'POST',
-                credentials: 'include'
+                credentials: 'include',
+                headers: {
+                    'X-CSRF-Token': getCsrfToken()
+                }
             });
 
             if (response.status === 401) {
@@ -3016,7 +3074,10 @@
             const response = await fetch(`/api/chats/${encodeURIComponent(conversationId)}/messages?fileName=${encodeURIComponent(fileName)}`, {
                 method: 'POST',
                 credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': getCsrfToken()
+                },
                 body: JSON.stringify({ role, content, timestamp })
             });
 
@@ -3038,7 +3099,10 @@
         async function clearChatConversation(fileName, conversationId) {
             const response = await fetch(`/api/chats/${encodeURIComponent(conversationId)}/messages?fileName=${encodeURIComponent(fileName)}`, {
                 method: 'DELETE',
-                credentials: 'include'
+                credentials: 'include',
+                headers: {
+                    'X-CSRF-Token': getCsrfToken()
+                }
             });
 
             if (response.status === 401) {
@@ -3059,7 +3123,10 @@
         async function deleteChatConversationRecord(fileName, conversationId) {
             const response = await fetch(`/api/chats/${encodeURIComponent(conversationId)}?fileName=${encodeURIComponent(fileName)}`, {
                 method: 'DELETE',
-                credentials: 'include'
+                credentials: 'include',
+                headers: {
+                    'X-CSRF-Token': getCsrfToken()
+                }
             });
 
             if (response.status === 401) {
@@ -3865,20 +3932,27 @@
             speechSynthesisUtterance.pitch = parseFloat(pitchInput.value) || 1.0;
 
             // 选择最佳英文语音
-            // 优先选择在线语音（通常质量更好），然后是本地语音
+            // 优先选择在线语音（质量更好），无法访问时降级到本地语音
             let selectedVoice = null;
 
-            // 策略1: 优先选择高质量在线英文语音
+            // 策略1: 优先选择在线英文语音（Google TTS 等高质量语音）
             selectedVoice = availableVoices.find(voice =>
                 voice.lang.startsWith('en') && !voice.localService
             );
 
-            // 策略2: 如果没有在线语音，选择本地英文语音
+            // 策略2: 如果没有在线语音或无法访问，降级到本地英文语音
+            if (!selectedVoice) {
+                selectedVoice = availableVoices.find(voice =>
+                    voice.lang.startsWith('en') && voice.localService
+                );
+            }
+
+            // 策略3: 兜底 - 选择任何可用的英文语音
             if (!selectedVoice) {
                 selectedVoice = availableVoices.find(voice => voice.lang.startsWith('en'));
             }
 
-            // 策略3: Safari 特定优化 - 选择 Samantha 或其他高质量语音
+            // 策略4: Safari 特定优化 - 选择 Samantha 或其他高质量语音
             if (!selectedVoice && /^((?!chrome|android).)*safari/i.test(navigator.userAgent)) {
                 selectedVoice = availableVoices.find(voice =>
                     voice.name.includes('Samantha') || voice.name.includes('Alex')
@@ -4252,7 +4326,8 @@
                     method: 'POST',
                     credentials: 'include',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': getCsrfToken()
                     },
                     body: JSON.stringify({
                         systemPrompt: String(systemPrompt || ''),
@@ -5420,18 +5495,8 @@
             nodeElement.textContent = node.label;
             nodeElement.setAttribute('data-type', g(node.type));
 
-            // 添加点击事件来折叠/展开子节点
             if (node.children && node.children.length > 0) {
-                nodeElement.style.cursor = 'pointer';
-
-                nodeElement.setAttribute('onclick',
-                    `const childrenContainer = this.nextElementSibling;
-                    if (childrenContainer.style.display === 'none') {
-                        childrenContainer.style.display = 'flex';
-                    } else {
-                        childrenContainer.style.display = 'none';
-                    }`
-                );
+                nodeElement.classList.add('is-collapsible');
             }
 
             parentElement.appendChild(nodeElement);
@@ -5443,7 +5508,8 @@
 
                 // 初始状态下，非第一层节点默认折叠
                 if (level > 0) {
-                    childrenContainer.style.display = 'none';
+                    childrenContainer.classList.add('is-collapsed');
+                    nodeElement.classList.add('is-collapsed');
                 }
 
                 node.children.forEach(child => {

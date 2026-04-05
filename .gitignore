@@ -5,3 +5,5 @@ node_modules/
 data/
 Reading Helperv2.3.htm
 ways.md
+CSRF_PROTECTION.md
+config/users.config.json

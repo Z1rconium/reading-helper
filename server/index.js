@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
+const cookieParser = require('cookie-parser');
 
 const { loadPlatformConfig, loadUsersConfig, getConfigDir } = require('./config-loader');
 const {
@@ -32,12 +33,34 @@ const {
 const { assertValidUserId } = require('./user-paths');
 const { createSessionStore } = require('./session-store');
 const { cleanupOrphanedUsers } = require('./cleanup-orphaned-users');
+const { csrfProtection, ensureCsrfToken, generateCsrfToken, setCsrfCookie } = require('./csrf-protection');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const DEFAULT_SYSTEM_PROMPT = '你是一位专业的英语老师，擅长用中文解释英语知识。';
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 5;
+const TRUST_PROXY_ENV = process.env.TRUST_PROXY;
+
+function parseTrustProxy(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed === '') {
+    return null;
+  }
+  if (trimmed === 'true') {
+    return true;
+  }
+  if (trimmed === 'false') {
+    return false;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    return Number(trimmed);
+  }
+  return value;
+}
 
 function requireAuth(req, res, next) {
   if (req.session && req.session.authenticated && typeof req.session.userId === 'string' && req.session.userId) {
@@ -307,14 +330,19 @@ async function bootstrap() {
   const users = await loadUsersConfig();
   const { usersByAccessKey, usersById } = buildUserMaps(users);
   const sessionStore = await createSessionStore();
+  const trustProxy = parseTrustProxy(TRUST_PROXY_ENV);
+  const resolvedTrustProxy = trustProxy === null ? 1 : trustProxy;
 
   // 清理不在配置文件中的用户数据
   const validUserIds = users.map((user) => user.userId);
   await cleanupOrphanedUsers(validUserIds);
 
+  app.set('trust proxy', resolvedTrustProxy);
+
   app.use(cors({ origin: true, credentials: true }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false }));
+  app.use(cookieParser());
 
   app.use(
     session({
@@ -326,11 +354,13 @@ async function bootstrap() {
       cookie: {
         httpOnly: true,
         sameSite: 'lax',
-        secure: true,
+        secure: 'auto',
         maxAge: 7 * 24 * 60 * 60 * 1000
       }
     })
   );
+
+  app.use(ensureCsrfToken);
 
   const loginRateLimiter = rateLimit({
     windowMs: LOGIN_WINDOW_MS,
@@ -354,6 +384,10 @@ async function bootstrap() {
 
     req.session.authenticated = true;
     req.session.userId = user.userId;
+
+    const csrfToken = generateCsrfToken();
+    setCsrfCookie(res, csrfToken);
+
     return res.json({ authenticated: true, userId: user.userId });
   });
 
@@ -365,9 +399,10 @@ async function bootstrap() {
     });
   });
 
-  app.post('/api/auth/logout', (req, res) => {
+  app.post('/api/auth/logout', csrfProtection, (req, res) => {
     req.session.destroy(() => {
       res.clearCookie('reading_helper_sid');
+      res.clearCookie('csrf_token');
       res.json({ authenticated: false, userId: null });
     });
   });
@@ -383,7 +418,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/files/upload', requireAuth, (req, res, next) => {
+  app.post('/api/files/upload', requireAuth, csrfProtection, (req, res, next) => {
     upload.single('file')(req, res, (error) => {
       if (error) {
         return res.status(400).json({ error: error.message });
@@ -429,7 +464,7 @@ async function bootstrap() {
     }
   });
 
-  app.delete('/api/files/:name', requireAuth, async (req, res) => {
+  app.delete('/api/files/:name', requireAuth, csrfProtection, async (req, res) => {
     const { name } = req.params;
     try {
       await deleteUploadedText(req.session.userId, name);
@@ -483,7 +518,7 @@ async function bootstrap() {
     }
   });
 
-  app.put('/api/prompts/:name', requireAuth, async (req, res) => {
+  app.put('/api/prompts/:name', requireAuth, csrfProtection, async (req, res) => {
     const { name } = req.params;
     const content = req.body?.content;
     const userId = validateRequestedUserId(req, res);
@@ -511,7 +546,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/chats', requireAuth, async (req, res) => {
+  app.post('/api/chats', requireAuth, csrfProtection, async (req, res) => {
     const articleName = getArticleNameFromQuery(req);
     if (!articleName) {
       return res.status(400).json({ error: 'fileName 不能为空' });
@@ -540,7 +575,7 @@ async function bootstrap() {
     }
   });
 
-  app.delete('/api/chats/:conversationId', requireAuth, async (req, res) => {
+  app.delete('/api/chats/:conversationId', requireAuth, csrfProtection, async (req, res) => {
     const articleName = getArticleNameFromQuery(req);
     const { conversationId } = req.params;
     if (!articleName) {
@@ -555,7 +590,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/chats/:conversationId/messages', requireAuth, async (req, res) => {
+  app.post('/api/chats/:conversationId/messages', requireAuth, csrfProtection, async (req, res) => {
     const articleName = getArticleNameFromQuery(req);
     const { conversationId } = req.params;
     const role = req.body?.role;
@@ -574,7 +609,7 @@ async function bootstrap() {
     }
   });
 
-  app.delete('/api/chats/:conversationId/messages', requireAuth, async (req, res) => {
+  app.delete('/api/chats/:conversationId/messages', requireAuth, csrfProtection, async (req, res) => {
     const articleName = getArticleNameFromQuery(req);
     const { conversationId } = req.params;
 
@@ -590,7 +625,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/ai/chat/stream', requireAuth, async (req, res) => {
+  app.post('/api/ai/chat/stream', requireAuth, csrfProtection, async (req, res) => {
     const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
     const systemPrompt = typeof req.body?.systemPrompt === 'string' ? req.body.systemPrompt : '';
     if (!prompt) {
