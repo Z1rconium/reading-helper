@@ -1,25 +1,34 @@
-const fs = require('fs/promises');
-const session = require('express-session');
-const SQLiteStore = require('connect-sqlite3')(session);
-
-const { getSessionStoreDir } = require('./user-paths');
-
-const SESSION_DB_FILE = 'reading-helper-sessions.sqlite3';
+const { RedisStore } = require('connect-redis');
+const { createClient } = require('redis');
 
 async function createSessionStore() {
-  const dir = getSessionStoreDir();
-  await fs.mkdir(dir, { recursive: true });
+  const redisUrl = process.env.REDIS_URL;
+  if (!redisUrl) {
+    throw new Error('缺少 REDIS_URL 环境变量，无法初始化 Redis Session Store');
+  }
 
-  return new SQLiteStore({
-    dir,
-    db: SESSION_DB_FILE,
-    table: 'sessions',
-    concurrentDb: true,
-    createDirIfNotExists: true
+  const redisClient = createClient({ url: redisUrl });
+
+  redisClient.on('connect', () => {
+    console.log('[session] Redis connected');
+  });
+
+  redisClient.on('reconnecting', () => {
+    console.log('[session] Redis reconnecting');
+  });
+
+  redisClient.on('error', (error) => {
+    console.error('[session] Redis error:', error.message);
+  });
+
+  await redisClient.connect();
+
+  return new RedisStore({
+    client: redisClient,
+    prefix: process.env.REDIS_SESSION_PREFIX || 'reading-helper:sess:'
   });
 }
 
 module.exports = {
-  createSessionStore,
-  SESSION_DB_FILE
+  createSessionStore
 };

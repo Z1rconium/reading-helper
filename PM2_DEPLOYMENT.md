@@ -5,6 +5,7 @@
 ## 前置要求
 
 - Node.js 14+ 和 npm
+- Redis 6+
 - PM2 (全局安装)
 - Git (可选，用于更新)
 
@@ -46,7 +47,7 @@ cd reading-helper
 ### 1. 安装依赖
 
 ```bash
-m
+npm install
 ```
 
 ### 2. 配置文件
@@ -65,7 +66,7 @@ mkdir -p config
 编辑 `config/platform.config.json`：
 ```json
 {
-  "sessionSecret": "your-random-secret-key-here"
+  "session_secret": "your-random-secret-key-here"
 }
 ```
 
@@ -90,7 +91,6 @@ mkdir -p config
 
 ```bash
 mkdir -p data/users
-mkdir -p data/sessions
 ```
 
 ## 四、PM2 配置
@@ -114,7 +114,7 @@ module.exports = {
       PORT: 3000,
       CONFIG_DIR: './config',
       USER_DATA_ROOT: './data/users',
-      SESSION_STORE_DIR: './data/sessions'
+      REDIS_URL: 'redis://127.0.0.1:6379'
     },
     error_file: './logs/pm2-error.log',
     out_file: './logs/pm2-out.log',
@@ -128,6 +128,12 @@ module.exports = {
 ```
 
 如需自定义配置，可编辑 `ecosystem.config.js` 文件。
+
+启动前请确认 Redis 可连通（示例）：
+
+```bash
+redis-cli -u redis://127.0.0.1:6379 ping
+```
 
 ## 五、启动服务
 

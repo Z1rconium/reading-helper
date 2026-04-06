@@ -2573,6 +2573,73 @@
         };
         const DEFAULT_CHAT_SYSTEM_PROMPT = '你是一位专业的英语老师。请回答学生关于英语学习的问题，要求：回答专业准确、重点清晰，并在需要时给出简短例子。';
         const MAX_ARTICLE_CONTEXT_CHARS = 12000;
+        const HEARTBEAT_FOREGROUND_MS = 4 * 60 * 1000;
+        const HEARTBEAT_BACKGROUND_MS = 10 * 60 * 1000;
+        let heartbeatTimerId = 0;
+        let heartbeatInFlight = false;
+
+        function stopHeartbeat() {
+            if (heartbeatTimerId) {
+                window.clearTimeout(heartbeatTimerId);
+                heartbeatTimerId = 0;
+            }
+        }
+
+        function getHeartbeatIntervalMs() {
+            return document.visibilityState === 'visible' ? HEARTBEAT_FOREGROUND_MS : HEARTBEAT_BACKGROUND_MS;
+        }
+
+        function scheduleHeartbeat(delayMs = getHeartbeatIntervalMs()) {
+            stopHeartbeat();
+            heartbeatTimerId = window.setTimeout(() => {
+                void sendHeartbeat('timer');
+            }, delayMs);
+        }
+
+        async function sendHeartbeat(reason = 'manual') {
+            if (!currentUserId) {
+                stopHeartbeat();
+                return;
+            }
+            if (heartbeatInFlight) {
+                scheduleHeartbeat();
+                return;
+            }
+
+            heartbeatInFlight = true;
+            try {
+                const response = await fetch('/api/auth/status', {
+                    method: 'GET',
+                    credentials: 'include',
+                    cache: 'no-store'
+                });
+
+                if (!response.ok) {
+                    console.warn(`[heartbeat] 请求失败 (${reason}): ${response.status}`);
+                    return;
+                }
+
+                const data = await response.json();
+                if (!data?.authenticated) {
+                    console.warn('[heartbeat] 当前会话未认证');
+                }
+            } catch (error) {
+                console.warn(`[heartbeat] 请求异常 (${reason}):`, error);
+            } finally {
+                heartbeatInFlight = false;
+                if (currentUserId) {
+                    scheduleHeartbeat();
+                }
+            }
+        }
+
+        function startHeartbeat() {
+            if (!currentUserId) {
+                stopHeartbeat();
+                return;
+            }
+            scheduleHeartbeat();
+        }
 
         function getCsrfToken() {
             const match = document.cookie.match(/csrf_token=([^;]+)/);
@@ -2686,8 +2753,10 @@
                 currentUserId = nextUserId;
                 if (authenticated) {
                     authModal.style.display = 'none';
+                    startHeartbeat();
                 } else {
                     showAuthModal();
+                    stopHeartbeat();
                 }
                 authError.style.display = 'none';
                 if (authenticated) {
@@ -2699,6 +2768,7 @@
                 console.error('检查登录状态失败:', error);
                 resetPromptState();
                 currentUserId = '';
+                stopHeartbeat();
                 showAuthModal();
                 return false;
             }
@@ -2737,6 +2807,7 @@
                 authError.style.display = 'none';
                 authModal.style.display = 'none';
                 logoutBtn.title = currentUserId ? `当前用户: ${currentUserId}` : '退出';
+                startHeartbeat();
                 await fetchServerFileList();
                 updateFileList();
             } catch (error) {
@@ -2746,6 +2817,7 @@
         }
 
         async function logout() {
+            stopHeartbeat();
             try {
                 await fetch('/api/auth/logout', {
                     method: 'POST',
@@ -3606,6 +3678,18 @@
                 await fetchServerFileList();
             }
             updateFileList();
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (!currentUserId) return;
+            if (document.visibilityState === 'visible') {
+                scheduleHeartbeat(0);
+                return;
+            }
+            scheduleHeartbeat(HEARTBEAT_BACKGROUND_MS);
+        });
+        window.addEventListener('online', () => {
+            if (!currentUserId) return;
+            scheduleHeartbeat(0);
         });
 
         refreshFileListBtn.addEventListener('click', async () => {

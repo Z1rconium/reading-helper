@@ -17,7 +17,7 @@
 
 - **运行时**: Node.js 18+
 - **框架**: Express 4
-- **会话**: express-session
+- **会话**: express-session + Redis（connect-redis）
 - **上传**: multer（内存模式）
 - **前端**: 原生 HTML / CSS / JavaScript，无构建步骤
 
@@ -65,6 +65,7 @@
 ## 环境要求
 
 - Node.js >= 18
+- Redis >= 6（用于 Session 存储）
 - 可访问的上游 AI 接口（兼容 OpenAI Chat Completions 或 Responses API）
 
 ## 安装
@@ -172,7 +173,7 @@ npm start
 自定义配置和数据目录：
 
 ```bash
-CONFIG_DIR=./config USER_DATA_ROOT=./data/users npm start
+CONFIG_DIR=./config USER_DATA_ROOT=./data/users REDIS_URL=redis://127.0.0.1:6379 npm start
 ```
 
 默认监听地址：
@@ -188,6 +189,8 @@ http://localhost:3000
 | `PORT` | `3000` | 服务监听端口 |
 | `CONFIG_DIR` | `./config` | 配置目录路径 |
 | `USER_DATA_ROOT` | `./data/users` | 用户数据根目录；若未设置，则默认解析为 `process.cwd()/data/users` |
+| `REDIS_URL` | — | Redis 连接地址（必填），例如 `redis://127.0.0.1:6379` 或 `rediss://user:pass@host:6379` |
+| `REDIS_SESSION_PREFIX` | `reading-helper:sess:` | Session key 前缀 |
 | `DATA_DIR` | — | 兼容旧参数；设置后将以其父目录 + `/users` 推导用户数据根目录 |
 | `MAX_UPLOAD_BYTES` | `2097152`（2 MB） | 单次上传文件大小上限 |
 
@@ -208,6 +211,7 @@ Environment=NODE_ENV=production
 Environment=PORT=3000
 Environment=CONFIG_DIR=/path/to/reading-helper/config
 Environment=USER_DATA_ROOT=/path/to/reading-helper/data/users
+Environment=REDIS_URL=redis://127.0.0.1:6379
 ExecStart=/usr/bin/node /path/to/reading-helper/server/index.js
 Restart=always
 RestartSec=5
@@ -278,6 +282,7 @@ sudo systemctl start reading-helper
 ## 数据存储说明
 
 - 用户数据根目录优先取环境变量 `USER_DATA_ROOT`；若未设置，则默认为当前工作目录下的 `data/users/`
+- Session 数据存储在 Redis（由 `REDIS_URL` 指向）
 - 上传的文章存储在 `<USER_DATA_ROOT>/<userId>/uploads/`
 - 对话历史存储在 `<USER_DATA_ROOT>/<userId>/chats/<articleBase64url>/` 目录下，每条对话对应一个 `<uuid>.json` 文件
 - 旧版本使用单 JSON 文件存储所有对话，首次访问时会自动迁移到新格式
@@ -359,7 +364,7 @@ data: [DONE]
 - `config/*.json` 应视为本地运行配置，可加入 `.gitignore`
 - 仅允许上传 `.txt` 和 `.text` 文件
 - 服务端对文件名、提示词文件名、对话 ID 已做基本验证，但建议仅在受控网络环境中部署
-- Session Cookie 的 `secure` 选项当前为 `false`；若通过 HTTPS 部署，建议在 `server/index.js` 中改为 `true`
+- Session Cookie 已使用 `secure: 'auto'`；若部署在 HTTPS 反向代理后，请正确设置 `X-Forwarded-Proto` 和 `trust proxy`
 
 ## 开发说明
 

@@ -8,7 +8,8 @@ module.exports = {
       NODE_ENV: 'production',
       PORT: 3000,
       CONFIG_DIR: './config',
-      USER_DATA_ROOT: './data/users'
+      USER_DATA_ROOT: './data/users',
+      REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379'
     },
     error_file: './logs/pm2-error.log',
     out_file: './logs/pm2-out.log',
