@@ -778,11 +778,36 @@ async function bootstrap() {
     }
   });
 
+  // Enable compression for all responses
+  app.use(compression({
+    filter: (req, res) => {
+      if (req.headers['x-no-compression']) {
+        return false;
+      }
+      return compression.filter(req, res);
+    },
+    level: 6
+  }));
+
+  // Static files with optimized caching strategy
   app.use(express.static(path.join(process.cwd(), 'public'), {
-    maxAge: '1d',           // 缓存1天
-    etag: true,             // 启用ETag
-    lastModified: true,     // 启用Last-Modified
-    immutable: false        // 非永久缓存
+    maxAge: process.env.NODE_ENV === 'production' ? '1y' : '1d',
+    etag: true,
+    lastModified: true,
+    setHeaders: (res, filePath) => {
+      // Cache CSS and JS files with revalidation (filenames are not fingerprinted)
+      if (filePath.endsWith('.css') || filePath.endsWith('.js')) {
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+      }
+      // Cache images for 1 week
+      else if (filePath.match(/\.(jpg|jpeg|png|gif|svg|ico|webp)$/)) {
+        res.setHeader('Cache-Control', 'public, max-age=604800');
+      }
+      // HTML files: no cache (always fresh)
+      else if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      }
+    }
   }));
 
   app.listen(PORT, () => {
