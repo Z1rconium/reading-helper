@@ -1,5 +1,7 @@
 # Reading Helper
 
+English | [简体中文](zh_README.md)
+
 A Node.js-based English reading assistant with AI integration, designed for multi-user environments with isolated data storage and streaming AI responses.
 
 ## 📋 Project Overview
