@@ -5,6 +5,11 @@ const path = require('path');
 const { getConfigDir } = require('./config-loader');
 const { getUserPromptDir } = require('./user-paths');
 
+// 导入 p-limit
+const pLimitModule = require('p-limit');
+const pLimit = typeof pLimitModule === 'function' ? pLimitModule : pLimitModule.default;
+const STAT_CONCURRENCY_LIMIT = 10;
+
 const MAX_PROMPT_NAME_LENGTH = 128;
 
 // 记录已同步过的用户，避免重复检查
@@ -75,25 +80,32 @@ async function syncDefaultPrompts(userId) {
   return promptDir;
 }
 
+// #8 Prompt 列表并发 stat 优化
 async function listPromptFiles(userId) {
   const promptDir = await syncDefaultPrompts(userId);
   const entries = await fs.readdir(promptDir, { withFileTypes: true });
 
-  const files = [];
+  const limit = pLimit(STAT_CONCURRENCY_LIMIT);
+  const statTasks = [];
+
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!isValidPromptName(entry.name)) continue;
 
-    const filePath = path.join(promptDir, entry.name);
-    const stat = await fs.stat(filePath);
-
-    files.push({
-      name: entry.name,
-      updatedAt: stat.mtime.toISOString(),
-      size: stat.size
-    });
+    statTasks.push(
+      limit(async () => {
+        const filePath = path.join(promptDir, entry.name);
+        const stat = await fs.stat(filePath);
+        return {
+          name: entry.name,
+          updatedAt: stat.mtime.toISOString(),
+          size: stat.size
+        };
+      })
+    );
   }
 
+  const files = await Promise.all(statTasks);
   files.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
   return files;
 }

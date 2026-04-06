@@ -1,3 +1,5 @@
+const https = require('https');
+const http = require('http');
 const fs = require('fs/promises');
 const express = require('express');
 const session = require('express-session');
@@ -43,6 +45,22 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 5;
 const TRUST_PROXY_ENV = process.env.TRUST_PROXY;
 const AI_REQUEST_TIMEOUT_MS = 120000; // 120 秒超时
+const MAX_SSE_BUFFER_SIZE = 10 * 1024; // 10KB
+
+// #11 AI 请求连接复用 - 创建全局 agent
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 60000
+});
+
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 60000
+});
 
 // CET词表缓存
 let cetWordListCache = null;
@@ -360,7 +378,38 @@ async function bootstrap() {
 
   app.set('trust proxy', resolvedTrustProxy);
 
-  app.use(compression());
+  // #5 Compression 配置优化
+  app.use(compression({
+    threshold: 1024,  // 只压缩 >1KB 的响应
+    level: 6,         // 压缩级别（1-9，6是平衡点）
+    filter: (req, res) => {
+      // 跳过已压缩的内容类型
+      if (req.headers['x-no-compression']) return false;
+      return compression.filter(req, res);
+    }
+  }));
+
+  // #15 慢请求日志
+  app.use((req, res, next) => {
+    const start = Date.now();
+
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+
+      // 记录慢请求（>1秒）
+      if (duration > 1000) {
+        console.warn(`[Slow] ${req.method} ${req.path} ${duration}ms`);
+      }
+
+      // 记录所有 API 请求
+      if (req.path.startsWith('/api/')) {
+        console.log(`[API] ${req.method} ${req.path} ${res.statusCode} ${duration}ms`);
+      }
+    });
+
+    next();
+  });
+
   app.use(cors({ origin: true, credentials: true }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false }));
@@ -675,7 +724,8 @@ async function bootstrap() {
         method: 'POST',
         headers: buildUpstreamHeaders(providerConfig),
         body: JSON.stringify(requestBody),
-        signal: controller.signal
+        signal: controller.signal,
+        agent: providerConfig.api_url.startsWith('https') ? httpsAgent : httpAgent
       });
 
       if (!upstreamResponse.ok || !upstreamResponse.body) {
@@ -694,6 +744,13 @@ async function bootstrap() {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
+
+        // #16 防止 buffer 过大
+        if (buffer.length > MAX_SSE_BUFFER_SIZE) {
+          console.warn('[SSE] Buffer overflow, resetting');
+          buffer = buffer.slice(-1024); // 只保留最后 1KB
+        }
+
         const chunks = buffer.split('\n\n');
         buffer = chunks.pop() || '';
 
@@ -731,6 +788,21 @@ async function bootstrap() {
   app.listen(PORT, () => {
     console.log(`Reading Helper server listening on http://localhost:${PORT}`);
   });
+
+  // #14 内存监控
+  setInterval(() => {
+    const usage = process.memoryUsage();
+    const heapUsedMB = (usage.heapUsed / 1024 / 1024).toFixed(2);
+    const heapTotalMB = (usage.heapTotal / 1024 / 1024).toFixed(2);
+    const rssMB = (usage.rss / 1024 / 1024).toFixed(2);
+
+    // 超过 1.5GB 时告警
+    if (usage.heapUsed > 1.5 * 1024 * 1024 * 1024) {
+      console.warn(`[Memory] High memory usage: Heap ${heapUsedMB}/${heapTotalMB} MB, RSS ${rssMB} MB`);
+    } else {
+      console.log(`[Memory] Heap ${heapUsedMB}/${heapTotalMB} MB, RSS ${rssMB} MB`);
+    }
+  }, 5 * 60 * 1000); // 每 5 分钟检查一次
 }
 
 bootstrap().catch((error) => {

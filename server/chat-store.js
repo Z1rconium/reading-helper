@@ -75,6 +75,7 @@ function sanitizeAssistantHtml(content) {
   });
 }
 
+// #7 HTML 清理优化 - 只在写入时清理
 function sanitizeInteraction(interaction) {
   if (!interaction || typeof interaction !== 'object') return interaction;
   if (interaction.role !== 'assistant') return interaction;
@@ -119,9 +120,12 @@ function normalizeInteraction(interaction) {
   if (!role) return null;
   if (!content.trim()) return null;
 
+  // #7 在写入时清理 HTML（仅对 assistant 角色）
+  const sanitizedContent = role === 'assistant' ? sanitizeAssistantHtml(content) : content;
+
   return {
     role,
-    content,
+    content: sanitizedContent,
     timestamp: normalizeTimestamp(interaction.timestamp, new Date().toISOString())
   };
 }
@@ -204,13 +208,32 @@ async function readConversation(userId, articleName, conversationId) {
   const candidate = parsed?.conversation && typeof parsed.conversation === 'object'
     ? parsed.conversation
     : parsed;
-  const normalized = normalizeConversation(candidate);
-  if (!normalized || normalized.id !== conversationId) {
+
+  // #7 读取时不再清理 HTML（已在写入时清理）
+  if (!candidate || typeof candidate !== 'object') {
     const malformed = new Error('对话记录文件内容非法');
     malformed.code = 'MALFORMED_CHAT_STORE';
     throw malformed;
   }
-  return normalized;
+
+  if (!isValidConversationId(candidate.id) || candidate.id !== conversationId) {
+    const malformed = new Error('对话记录文件内容非法');
+    malformed.code = 'MALFORMED_CHAT_STORE';
+    throw malformed;
+  }
+
+  const createdAt = normalizeTimestamp(candidate.createdAt, new Date().toISOString());
+  const updatedAt = normalizeTimestamp(candidate.updatedAt, createdAt);
+  const interactions = Array.isArray(candidate.interactions)
+    ? candidate.interactions.filter((item) => item && typeof item === 'object' && item.role && item.content)
+    : [];
+
+  return {
+    id: candidate.id,
+    createdAt,
+    updatedAt,
+    interactions
+  };
 }
 
 async function listConversationFiles(userId, articleName) {
@@ -247,16 +270,34 @@ async function removeArticleDirIfEmpty(userId, articleName) {
   }
 }
 
+// #13 迁移检查优化 - 记录已迁移的文章
+const migratedArticles = new Map(); // userId -> Set<articleName>
+
 async function migrateLegacyStoreIfNeeded(userId, articleName) {
   assertValidArticleName(articleName);
   await ensureChatDir(userId);
+
+  // 检查是否已迁移
+  if (!migratedArticles.has(userId)) {
+    migratedArticles.set(userId, new Set());
+  }
+
+  const userMigrated = migratedArticles.get(userId);
+  if (userMigrated.has(articleName)) {
+    return; // 已迁移，跳过
+  }
+
   const legacyPath = getLegacyStorePath(userId, articleName);
 
   let raw;
   try {
     raw = await fs.readFile(legacyPath, 'utf8');
   } catch (error) {
-    if (error && error.code === 'ENOENT') return;
+    if (error && error.code === 'ENOENT') {
+      // 标记为已检查
+      userMigrated.add(articleName);
+      return;
+    }
     throw error;
   }
 
@@ -275,6 +316,9 @@ async function migrateLegacyStoreIfNeeded(userId, articleName) {
   }
 
   await fs.unlink(legacyPath);
+
+  // 迁移完成后标记
+  userMigrated.add(articleName);
 }
 
 function stripHtml(content) {
