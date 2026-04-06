@@ -2755,6 +2755,8 @@
                     authModal.style.display = 'none';
                     startHeartbeat();
                 } else {
+                    serverFiles.clear();
+                    updateFileList();
                     showAuthModal();
                     stopHeartbeat();
                 }
@@ -2767,6 +2769,8 @@
             } catch (error) {
                 console.error('检查登录状态失败:', error);
                 resetPromptState();
+                serverFiles.clear();
+                updateFileList();
                 currentUserId = '';
                 stopHeartbeat();
                 showAuthModal();

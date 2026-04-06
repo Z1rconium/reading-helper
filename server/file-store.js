@@ -1,7 +1,9 @@
 const fs = require('fs/promises');
 const path = require('path');
-const pLimit = require('p-limit');
+const pLimitModule = require('p-limit');
 const { getUserUploadDir } = require('./user-paths');
+
+const pLimit = typeof pLimitModule === 'function' ? pLimitModule : pLimitModule.default;
 
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
 const ALLOWED_EXTENSIONS = new Set(['.txt', '.text', '.md']);
@@ -16,8 +18,11 @@ function isValidRequestedName(fileName) {
   if (typeof fileName !== 'string') return false;
   if (!fileName || fileName.length > 255) return false;
   if (fileName.includes('/') || fileName.includes('\\')) return false;
+  if (fileName === '.' || fileName === '..') return false;
   if (!hasAllowedTextExtension(fileName)) return false;
-  return /^[\w\-. \u4e00-\u9fa5]+$/.test(fileName);
+  // Allow alphanumeric, Chinese characters, spaces, and common punctuation
+  // Exclude only path separators and control characters
+  return /^[\w\-. ()\[\]{}!@#$%^&+=,;'`~\u4e00-\u9fa5]+$/.test(fileName);
 }
 
 function normalizeUploadName(originalName) {
