@@ -1,84 +1,127 @@
 # Reading Helper
 
-一个基于 Node.js + Express 的英语阅读助手。提供静态前端页面和轻量后端，支持多用户访问控制、文本上传与管理、提示词管理、多轮对话历史持久化，以及将 AI 请求以流式方式转发到各用户自己的上游模型服务。
+一个基于 Node.js + Express 的英语阅读助手。前端为单页静态页面，后端负责用户鉴权、文件与对话持久化、提示词管理，并以 SSE 方式转发上游 AI 响应。支持多用户隔离，每位用户使用自己的模型配置与提示词。
 
-## 功能概览
+## 功能与特性（全量清单）
 
-- 通过用户专属 `accessKey` 登录，服务端 Session 保持登录状态（有效期 7 天）
-- 上传、列出、读取、删除 `.txt` / `.text` 文件，支持中文文件名
-- 在浏览器中阅读文章，结合选词、选句、选段进行 AI 交互
-- 支持 Chat Completions 和 OpenAI Responses API 两种上游接口格式，自动判断
-- 按文章维度管理多个独立对话，每条对话单独持久化为 JSON 文件
-- 在 `data/users/<userId>/prompts/` 中按用户管理系统提示词，并以 `config/prompts/` 作为默认模板源
-- 通过 `/api/ai/chat/stream` 以 SSE 流式转发 AI 响应，按用户独立使用各自的 provider 配置
-- 提示词接口要求显式传递 `userId`，并且与当前 Session 用户一致
+- 基于 `accessKey` 的多用户登录，Session 保持 7 天
+- 登录限流：15 分钟窗口最多 5 次失败尝试
+- CSRF 防护：Cookie + Header 双重校验
+- 支持 `.txt` / `.text` 上传、列表、读取、删除，允许中文文件名
+- 文件删除时同步清理该文章下的全部对话记录
+- 文章阅读区支持拖拽调节面板宽度、字体大小调整
+- 支持选词 / 选句 / 选段并触发 AI 功能
+- 朗读功能：基于 Web Speech API，可调语速/音量/音调
+- 文章上下文开关：可在问答中附带全文（最长 12000 字符）
+- 多轮对话持久化：按“文章 + 会话”维度分文件保存
+- 历史对话列表：按更新时间排序，可加载/删除
+- SSE 流式响应：逐 token 渲染 AI 输出
+- 上游 API 自动识别并适配
+- OpenAI Chat Completions
+- OpenAI Responses API
+- Anthropic Messages API
+- 提示词管理：每用户拥有独立提示词副本
+- 默认提示词模板从 `config/prompts/` 首次自动拷贝
+- 前端支持提示词列表浏览、编辑、保存
+- 结构化输出渲染与交互
+- 语法分析 JSON → 树形结构渲染（可折叠）
+- 多项选择题 JSON → 可选项渲染与正确性提示
+- 判断题 JSON → True/False 交互
+- 开放题 JSON → 可展开答案
+- 思维导图 Markdown → Markmap 可视化
+- CET4/CET6 词汇标注：可一键标注/取消
+- 输出安全处理
+- 后端 `sanitize-html` 清洗 AI 输出
+- 前端 `DOMPurify` 二次清洗
+- 启动时自动清理不在配置文件中的“孤立用户数据”目录
 
-## 技术栈
+## 内置 AI 功能（基于提示词模板）
 
-- **运行时**: Node.js 18+
-- **框架**: Express 4
-- **会话**: express-session + Redis（connect-redis）
-- **上传**: multer（内存模式）
-- **前端**: 原生 HTML / CSS / JavaScript，无构建步骤
+- 单词解释（词性、音标、搭配、例句、同反义词）
+- 句子分析（语法结构、要点、改写、翻译）
+- 彩虹拆句（JSON 语法树 + 结构标注）
+- 段落翻译
+- 段落概括 + 概括评价
+- 文章思维导图
+- 全文开放题（10 题）
+- 全文多项选择题（10 题）
+- 全文判断题（10 题）
+- 通用问答（可选是否带文章上下文）
+
+## 技术架构（基本分析）
+
+整体分为三层：前端单页、后端 API、持久化与上游 AI。
+
+```
+Browser (public/index.html)
+  |  静态资源 + JS 逻辑
+  |  登录 / 上传 / 对话 / SSE
+  v
+Express API (server/index.js)
+  |  Session (Redis)
+  |  文件/对话/提示词
+  |  AI 代理 (SSE)
+  v
+Storage & Upstream
+  - Redis: Session
+  - FS: data/users/<userId>/uploads, prompts, chats
+  - Upstream AI: OpenAI / Anthropic / 自建网关
+```
+
+关键模块说明：
+
+- `public/index.html`: 单文件前端（UI + 业务逻辑）
+- `server/index.js`: 路由、鉴权、上传、对话、AI 代理
+- `server/session-store.js`: Redis Session Store 初始化
+- `server/file-store.js`: 上传文件读写与校验
+- `server/chat-store.js`: 对话持久化、旧格式迁移、输出清洗
+- `server/prompt-store.js`: 提示词默认模板同步与读写
+- `server/user-paths.js`: 用户数据目录规划
+- `server/csrf-protection.js`: CSRF Cookie/Header 校验
+- `server/cleanup-orphaned-users.js`: 清理孤立用户目录
 
 ## 目录结构
 
-```text
+```
 .
 ├── config/
-│   ├── platform.config.json        # 平台配置（session secret）
-│   ├── users.config.json           # 用户列表与 AI provider 配置
-│   └── prompts/                    # 默认系统提示词模板（.md 文件）
-│       ├── analyze-sentence.md
-│       ├── color-sentence.md
-│       ├── explain-word.md
-│       ├── mcq.md
-│       ├── mindmap.md
-│       ├── qa.md
-│       ├── send-button.md
-│       ├── summarize-paragraph.md
-│       ├── summary-evaluation.md
-│       ├── tf.md
-│       └── translate-paragraph.md
+│   ├── platform.config.json
+│   ├── users.config.json
+│   └── prompts/*.md
 ├── data/
-│   └── users/
-│       └── <userId>/
-│           ├── uploads/            # 用户上传的文本文件
-│           ├── prompts/            # 用户自己的提示词副本
-│           └── chats/
-│               └── <articleBase64>/
-│                   └── <uuid>.json # 每个对话独立存储
+│   └── users/<userId>/{uploads,prompts,chats}/
 ├── public/
-│   └── index.html                  # 单页前端，由 Express 静态托管
+│   └── index.html
 ├── server/
-│   ├── index.js                    # 服务入口，路由注册
-│   ├── config-loader.js            # 配置读取与校验
-│   ├── file-store.js               # 上传文件的增删查
-│   ├── prompt-store.js             # 提示词文件的读写
-│   ├── chat-store.js               # 对话历史持久化（含旧格式迁移）
-│   └── user-paths.js               # 用户数据目录路径计算
-├── reading-helper.service          # systemd 服务单元文件（Linux 部署参考）
-├── package.json
-└── README.md
+│   └── *.js
+├── ecosystem.config.js
+├── PM2_DEPLOYMENT.md
+└── package.json
 ```
 
-## 环境要求
+## 运行环境
 
 - Node.js >= 18
-- Redis >= 6（用于 Session 存储）
-- 可访问的上游 AI 接口（兼容 OpenAI Chat Completions 或 Responses API）
+- Redis >= 6
+- 可访问的上游 AI API
 
-## 安装
+## 安装与启动
 
 ```bash
 npm install
+
+# 开发模式
+npm run dev
+
+# 生产模式
+CONFIG_DIR=./config USER_DATA_ROOT=./data/users REDIS_URL=redis://127.0.0.1:6379 npm start
 ```
 
-## 配置
+默认监听 `http://localhost:3000`。
 
-项目从 `config/` 目录读取配置（可通过环境变量 `CONFIG_DIR` 覆盖）。仓库中的敏感值已替换为占位符，运行前需填入真实内容。
+## 配置文件
 
-### `config/platform.config.json`
+### config/platform.config.json
 
 ```json
 {
@@ -86,11 +129,7 @@ npm install
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
-| `session_secret` | Express Session 签名密钥，建议使用随机长字符串 |
-
-### `config/users.config.json`
+### config/users.config.json
 
 ```json
 {
@@ -108,318 +147,115 @@ npm install
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
-| `userId` | 用户唯一标识，仅允许字母、数字、下划线、中划线 |
-| `accessKey` | 用户登录口令，不可重复 |
-| `provider.api_url` | 上游模型接口地址（见下方 API 格式说明） |
-| `provider.api_key` | 上游模型服务密钥 |
-| `provider.api_model` | 模型名称 |
+规则要点：
 
-**上游 API 格式自动判断：**
+- `userId` 仅允许字母、数字、下划线、中划线
+- `accessKey` 不可重复
+- `provider.api_url` 自动识别 Chat Completions / Responses / Anthropic Messages
 
-- 若 `api_url` 包含 `anthropic` 或路径包含 `/messages` → 按 **Anthropic Messages API** 结构发请求（`system` 字段 + `messages` 数组）
-- 若 `api_url` 路径以 `/responses` 结尾 → 按 **OpenAI Responses API** 结构发请求（`instructions` + `input` 字段）
-- 否则 → 按 **Chat Completions** 风格发请求（`messages` 数组）
+## 常用环境变量
 
-#### Anthropic API 配置示例
+- `PORT` 默认 3000
+- `CONFIG_DIR` 默认 `./config`
+- `USER_DATA_ROOT` 默认 `./data/users`
+- `DATA_DIR` 兼容旧参数，会映射为其父目录下的 `users`
+- `REDIS_URL` 必填，Redis 连接地址
+- `REDIS_SESSION_PREFIX` Session Key 前缀，默认 `reading-helper:sess:`
+- `MAX_UPLOAD_BYTES` 单次上传上限，默认 2MB
+- `SESSION_STORE_DIR` 预留：Session 文件目录（仅在未来改为文件存储时有用）
+- `TRUST_PROXY` Express trust proxy（支持 `true/false/数字`）
 
-```json
-{
-  "userId": "user_with_claude",
-  "accessKey": "your_access_key",
-  "provider": {
-    "api_url": "https://api.anthropic.com/v1/messages",
-    "api_key": "sk-ant-api03-...",
-    "api_model": "claude-3-5-sonnet-20241022"
-  }
+## PM2 部署方式
+
+项目已提供 `ecosystem.config.js`，建议直接使用。
+
+```bash
+# 安装 PM2
+npm install -g pm2
+
+# 安装依赖
+npm install
+
+# 启动
+pm2 start ecosystem.config.js
+
+# 查看状态/日志
+pm2 list
+pm2 logs reading-helper
+```
+
+常用命令：
+
+```bash
+pm2 restart reading-helper
+pm2 stop reading-helper
+pm2 delete reading-helper
+pm2 reload reading-helper
+```
+
+开机自启：
+
+```bash
+pm2 save
+pm2 startup
+# 按提示执行命令（可能需要 sudo）
+```
+
+建议将 `REDIS_URL` 等敏感配置通过环境变量注入（避免写入仓库）。
+
+## 反向代理建议（SSE 必须）
+
+若使用 Nginx，请确保 SSE 不被缓冲：
+
+```nginx
+location / {
+  proxy_pass http://localhost:3000;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_buffering off;
+  proxy_read_timeout 86400;
 }
 ```
 
-注意：当前服务端请求头统一使用 `Authorization: Bearer <api_key>`。如果要**直连 Anthropic 官方 API**，还需要 `x-api-key` 与 `anthropic-version` 等请求头（目前未内置），请改造 `server/index.js` 或使用兼容 Bearer 认证的代理网关。
+## 常见问题与解决方案
 
-### 提示词模板
+- 启动时报错 `缺少 REDIS_URL`
+解决：设置 `REDIS_URL` 环境变量并确保 Redis 可连接。
 
-`config/prompts/` 保存默认提示词模板。每个用户首次访问提示词接口时，系统会将默认模板复制到 `data/users/<userId>/prompts/`；之后用户在前端"修改系统提示词"中的编辑只会影响自己的副本：
+- 登录/请求提示 `CSRF token 缺失/验证失败`
+解决：确保前端能正常写入 Cookie；反向代理需保留 `Set-Cookie` 与 `Cookie` 头；跨域访问请保持同域或配置正确的 `Origin` 与 `credentials`。
 
-| 文件名 | 用途 |
-|--------|------|
-| `explain-word.md` | 解释单词 |
-| `analyze-sentence.md` | 分析句子 |
-| `color-sentence.md` | 句子着色/标注 |
-| `translate-paragraph.md` | 翻译段落 |
-| `summarize-paragraph.md` | 段落总结 |
-| `summary-evaluation.md` | 总结评分 |
-| `qa.md` | 问答练习 |
-| `mcq.md` | 选择题 |
-| `tf.md` | 判断题 |
-| `mindmap.md` | 思维导图 |
-| `send-button.md` | 发送按钮行为 |
+- SSE 无法流式输出或经常中断
+解决：关闭代理缓冲（Nginx `proxy_buffering off`），并提高 `proxy_read_timeout`。
 
-## 启动方式
+- AI 响应为空或解析失败
+解决：检查上游 `api_url` 是否为 Chat Completions / Responses / Anthropic Messages 的正确地址；确认 `api_key` 与 `api_model`。
 
-开发模式（--watch 热重载）：
+- “思维导图”无法打开
+解决：检查 `markmap-view` 与 `d3` CDN 是否可访问；或自行改为本地静态资源。
 
-```bash
-npm run dev
-```
+- 朗读按钮不可用
+解决：浏览器需支持 Web Speech API（建议 Chrome / Edge / Safari）。
 
-生产模式：
+- 词汇标注无效
+解决：确认 `config/cet_word_list.txt` 存在，并且接口 `/api/cet-word-list` 未被代理拦截。
 
-```bash
-npm start
-```
+- 提示词保存失败（403）
+解决：前端请求中 `userId` 必须与 Session 中一致，检查是否多用户混用或 Cookie 丢失。
 
-自定义配置和数据目录：
+## 推荐服务器配置
 
-```bash
-CONFIG_DIR=./config USER_DATA_ROOT=./data/users REDIS_URL=redis://127.0.0.1:6379 npm start
-```
+以下为单实例（PM2 Cluster 可按核数扩展）的建议配置：
 
-默认监听地址：
+- 轻量体验（1-5 用户并发）：2 vCPU / 2 GB RAM / 20 GB SSD
+- 小团队（5-20 用户并发）：4 vCPU / 4-8 GB RAM / 40 GB SSD
+- 中等规模（20-50 用户并发）：8 vCPU / 16 GB RAM / 80 GB SSD
 
-```
-http://localhost:3000
-```
-
-## 可用环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `PORT` | `3000` | 服务监听端口 |
-| `CONFIG_DIR` | `./config` | 配置目录路径 |
-| `USER_DATA_ROOT` | `./data/users` | 用户数据根目录；若未设置，则默认解析为 `process.cwd()/data/users` |
-| `REDIS_URL` | — | Redis 连接地址（必填），例如 `redis://127.0.0.1:6379` 或 `rediss://user:pass@host:6379` |
-| `REDIS_SESSION_PREFIX` | `reading-helper:sess:` | Session key 前缀 |
-| `DATA_DIR` | — | 兼容旧参数；设置后将以其父目录 + `/users` 推导用户数据根目录 |
-| `MAX_UPLOAD_BYTES` | `2097152`（2 MB） | 单次上传文件大小上限 |
-
-## Linux systemd 部署
-
-仓库提供了 `reading-helper.service` 作为 systemd 单元文件参考模板：
-
-```ini
-[Unit]
-Description=Reading Helper Server
-After=network.target
-
-[Service]
-Type=simple
-User=<your-user>
-WorkingDirectory=/path/to/reading-helper
-Environment=NODE_ENV=production
-Environment=PORT=3000
-Environment=CONFIG_DIR=/path/to/reading-helper/config
-Environment=USER_DATA_ROOT=/path/to/reading-helper/data/users
-Environment=REDIS_URL=redis://127.0.0.1:6379
-ExecStart=/usr/bin/node /path/to/reading-helper/server/index.js
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-使用方式：
-
-```bash
-sudo cp reading-helper.service /etc/systemd/system/
-# 按实际路径修改 WorkingDirectory / ExecStart / Environment
-sudo systemctl daemon-reload
-sudo systemctl enable --now reading-helper
-```
-
-说明：
-
-- `WorkingDirectory` 必须是实际存在的项目目录；若目录不存在，systemd 会在启动前报 `status=200/CHDIR`
-- `ExecStart` 中的 Node.js 路径也必须按服务器实际安装位置填写，常见为 `/usr/bin/node`
-- 若显式设置了 `USER_DATA_ROOT`，上传文章、对话记录、提示词副本都会保存到该目录下
-- 若未设置 `USER_DATA_ROOT`，则默认保存到 `WorkingDirectory/data/users/`
-
-## 通过 GitHub 更新部署
-
-若 `/opt/reading-helper` 是 Git 仓库，直接拉取最新代码：
-
-```bash
-cd /opt/reading-helper
-sudo git pull --ff-only
-sudo npm install
-sudo systemctl restart reading-helper
-```
-
-若 `/opt/reading-helper` 不是 Git 仓库，可用“重新克隆 + 保留配置和数据”的方式更新：
-
-```bash
-sudo systemctl stop reading-helper
-sudo mkdir -p /opt/reading-helper-backup
-sudo rsync -a /opt/reading-helper/config /opt/reading-helper/data /opt/reading-helper-backup/
-sudo rm -rf /opt/reading-helper-tmp
-sudo git clone https://github.com/Z1rconium/reading-helper /opt/reading-helper-tmp
-sudo rsync -a /opt/reading-helper-backup/config/ /opt/reading-helper-tmp/config/
-sudo rsync -a /opt/reading-helper-backup/data/ /opt/reading-helper-tmp/data/
-sudo mv /opt/reading-helper /opt/reading-helper.old
-sudo mv /opt/reading-helper-tmp /opt/reading-helper
-cd /opt/reading-helper
-sudo npm install
-sudo systemctl start reading-helper
-```
-
-## 使用流程
-
-1. 启动服务，打开浏览器访问 `http://localhost:3000`
-2. 输入 `config/users.config.json` 中某个用户的 `accessKey` 登录
-3. 上传 `.txt` 或 `.text` 文件（支持中文文件名，单文件最大 2 MB）
-4. 在左侧“已读文章”选择文章，在中间阅读内容
-5. 使用右侧对话区发起 AI 问答、分析或总结
-6. 按文章维度查看、新建、清空或删除历史对话
-7. 通过"修改系统提示词"调整不同功能使用的提示模板
-
-## 界面文案更新
-
-- 左侧面板标题为“已读文章”，刷新按钮与标题同一水平线显示。
-- 阅读区与问答区的引导提示文案已移除，仅保留功能区标题与操作控件。
-
-## 数据存储说明
-
-- 用户数据根目录优先取环境变量 `USER_DATA_ROOT`；若未设置，则默认为当前工作目录下的 `data/users/`
-- Session 数据存储在 Redis（由 `REDIS_URL` 指向）
-- 上传的文章存储在 `<USER_DATA_ROOT>/<userId>/uploads/`
-- 对话历史存储在 `<USER_DATA_ROOT>/<userId>/chats/<articleBase64url>/` 目录下，每条对话对应一个 `<uuid>.json` 文件
-- 旧版本使用单 JSON 文件存储所有对话，首次访问时会自动迁移到新格式
-- 默认提示词模板存储在 `config/prompts/`
-- 用户编辑后的提示词存储在 `<USER_DATA_ROOT>/<userId>/prompts/`
-
-删除文章时，服务端会一并删除该用户下该文章关联的所有对话数据。
-
-## 主要 API 接口
-
-所有接口除认证检查外均需已登录的 Session。
-
-### 认证
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/api/auth/login` | 登录，请求体: `{ "accessKey": "..." }` |
-| `GET` | `/api/auth/status` | 获取当前登录状态 |
-| `POST` | `/api/auth/logout` | 退出登录 |
-
-### 文件
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/api/files/upload` | 上传文件，`multipart/form-data`，字段名 `file` |
-| `GET` | `/api/files` | 列出当前用户所有文件 |
-| `GET` | `/api/files/:name` | 读取文件内容 |
-| `DELETE` | `/api/files/:name` | 删除文件及关联对话 |
-
-### 提示词
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/prompts?userId=<userId>` | 列出当前用户可编辑的提示词文件名 |
-| `GET` | `/api/prompts/:name?userId=<userId>` | 读取当前用户的提示词内容 |
-| `PUT` | `/api/prompts/:name` | 更新当前用户提示词，请求体: `{ "userId": "...", "content": "..." }` |
-
-> 说明：提示词接口会校验 `userId` 与当前登录 Session 的 `userId` 一致，否则返回 `403`。
-
-### 对话历史
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/chats?fileName=<name>` | 列出指定文章的所有对话摘要 |
-| `POST` | `/api/chats?fileName=<name>` | 新建对话 |
-| `GET` | `/api/chats/:id?fileName=<name>` | 读取完整对话（含所有消息） |
-| `DELETE` | `/api/chats/:id?fileName=<name>` | 删除对话 |
-| `POST` | `/api/chats/:id/messages?fileName=<name>` | 追加消息，请求体: `{ "role": "user\|assistant", "content": "...", "timestamp": "optional" }` |
-| `DELETE` | `/api/chats/:id/messages?fileName=<name>` | 清空对话消息 |
-
-> 消息 `content` 最大长度为 200,000 字符。
-
-### AI 流式代理
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/api/ai/chat/stream` | 流式转发 AI 请求，返回 `text/event-stream` |
-
-请求体：
-
-```json
-{
-  "systemPrompt": "（可选，留空使用默认提示词）",
-  "prompt": "用户消息"
-}
-```
-
-SSE 事件格式：
-
-```
-data: {"delta": "文本片段"}
-data: {"error": "错误信息"}
-data: [DONE]
-```
-
-## 安全注意事项
-
-- 不要将真实 `api_key`、`accessKey`、`session_secret` 提交到代码仓库
-- `config/*.json` 应视为本地运行配置，可加入 `.gitignore`
-- 仅允许上传 `.txt` 和 `.text` 文件
-- 服务端对文件名、提示词文件名、对话 ID 已做基本验证，但建议仅在受控网络环境中部署
-- Session Cookie 已使用 `secure: 'auto'`；若部署在 HTTPS 反向代理后，请正确设置 `X-Forwarded-Proto` 和 `trust proxy`
-
-## 开发说明
-
-- 项目使用 CommonJS 模块风格
-- 没有单独的前端构建步骤，`public/` 目录由 Express 直接静态托管
-- 后端各模块职责：
-
-| 文件 | 职责 |
-|------|------|
-| `server/index.js` | 服务启动、中间件注册、所有路由定义 |
-| `server/config-loader.js` | 读取并校验 `platform.config.json` 和 `users.config.json` |
-| `server/file-store.js` | 上传文件的保存、列出、读取、删除，含文件名清洗与去重 |
-| `server/prompt-store.js` | 提示词 `.md` 文件的读写 |
-| `server/chat-store.js` | 对话持久化，含旧单文件格式到新目录格式的自动迁移 |
-| `server/user-paths.js` | 根据环境变量计算各用户数据目录的绝对路径 |
-
-## 手动验证建议
-
-当前仓库没有自动化测试，修改后建议手动验证以下流程：
-
-1. 登录与退出登录
-2. 上传文本文件（含中文文件名）
-3. 文件列表展示与文章内容读取
-4. 删除文章及关联对话
-5. 提示词列表读取与保存
-6. 新建对话、追加消息、清空对话、删除对话
-7. `/api/ai/chat/stream` 的流式返回是否正常（Chat Completions 和 Responses API 各测一次）
-
-## 常见问题
-
-### 服务启动失败，提示缺少配置字段
-
-检查 `config/platform.config.json` 和 `config/users.config.json` 是否仍保留占位符，或字段为空。至少需要配置一个用户。
-
-### AI 没有返回内容
-
-重点检查：
-
-- `api_url` 是否正确，路径末尾是否符合预期（`/chat/completions` vs `/responses`）
-- `api_key` 是否有效
-- `api_model` 是否存在
-- 上游接口是否支持流式响应（`stream: true`）
-
-### 上传文件失败
-
-重点检查：
-
-- 文件扩展名是否为 `.txt` 或 `.text`
-- 文件大小是否超过 `MAX_UPLOAD_BYTES`（默认 2 MB）
-- 文件名是否只含字母、数字、中文、下划线、中划线、空格、点
-
-### 旧版本对话数据是否兼容
-
-兼容。首次访问某篇文章的对话列表时，若检测到旧单文件格式（`<articleBase64>.json`），会自动迁移到新目录格式，无需手动操作。
+Redis 建议独立部署或使用托管服务，避免与应用进程争抢内存。
 
 ## License
 
-本项目采用 MIT License，允许使用、复制、修改、合并、发布和分发，但必须保留原始版权声明和许可声明。
+MIT
