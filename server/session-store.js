@@ -7,7 +7,14 @@ async function createSessionStore() {
     throw new Error('缺少 REDIS_URL 环境变量，无法初始化 Redis Session Store');
   }
 
-  const redisClient = createClient({ url: redisUrl });
+  const redisClient = createClient({
+    url: redisUrl,
+    socket: {
+      keepAlive: 30000,       // 每 30s 发送 TCP keepalive，防止连接被防火墙/NAT 静默断开
+      connectTimeout: 5000,   // 连接超时 5s
+      reconnectStrategy: (retries) => Math.min(retries * 100, 3000)  // 指数退避重连，最长 3s
+    }
+  });
 
   redisClient.on('connect', () => {
     console.log('[session] Redis connected');
