@@ -6,6 +6,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const cookieParser = require('cookie-parser');
+const compression = require('compression');
 
 const { loadPlatformConfig, loadUsersConfig, getConfigDir } = require('./config-loader');
 const {
@@ -41,6 +42,7 @@ const DEFAULT_SYSTEM_PROMPT = '你是一位专业的英语老师，擅长用中�
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 5;
 const TRUST_PROXY_ENV = process.env.TRUST_PROXY;
+const AI_REQUEST_TIMEOUT_MS = 120000; // 120 秒超时
 
 function parseTrustProxy(value) {
   if (typeof value !== 'string') {
@@ -333,12 +335,17 @@ async function bootstrap() {
   const trustProxy = parseTrustProxy(TRUST_PROXY_ENV);
   const resolvedTrustProxy = trustProxy === null ? 1 : trustProxy;
 
-  // 清理不在配置文件中的用户数据
-  const validUserIds = users.map((user) => user.userId);
-  await cleanupOrphanedUsers(validUserIds);
+  // 清理不在配置文件中的用户数据（仅在 pm2 cluster 的第一个实例或非 cluster 模式下执行）
+  const pmId = process.env.pm_id || process.env.NODE_APP_INSTANCE;
+  const shouldCleanup = !pmId || pmId === '0';
+  if (shouldCleanup) {
+    const validUserIds = users.map((user) => user.userId);
+    await cleanupOrphanedUsers(validUserIds);
+  }
 
   app.set('trust proxy', resolvedTrustProxy);
 
+  app.use(compression());
   app.use(cors({ origin: true, credentials: true }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false }));
@@ -643,13 +650,17 @@ async function bootstrap() {
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+
     try {
       const requestBody = buildUpstreamRequestBody(providerConfig, systemPrompt, prompt);
 
       const upstreamResponse = await fetch(providerConfig.api_url, {
         method: 'POST',
         headers: buildUpstreamHeaders(providerConfig),
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
       });
 
       if (!upstreamResponse.ok || !upstreamResponse.body) {
@@ -679,16 +690,19 @@ async function bootstrap() {
       if (buffer.trim() !== '') {
         relayUpstreamChunk(buffer, res);
       }
-      console.log('[DEBUG] ========== Stream Complete ==========');
 
       res.write('data: [DONE]\n\n');
       return res.end();
     } catch (error) {
-      console.log('[DEBUG] Stream Error:', error.message);
-      console.log('[DEBUG] Error Stack:', error.stack);
-      sendSseChunk(res, { error: error.message || '流式请求失败' });
+      if (error.name === 'AbortError') {
+        sendSseChunk(res, { error: 'AI 请求超时（120秒），请稍后重试' });
+      } else {
+        sendSseChunk(res, { error: error.message || '流式请求失败' });
+      }
       res.write('data: [DONE]\n\n');
       return res.end();
+    } finally {
+      clearTimeout(timeout);
     }
   });
 
