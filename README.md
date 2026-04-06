@@ -1,145 +1,210 @@
 # Reading Helper
 
-一个基于 Node.js + Express 的英语阅读助手。前端为单页静态页面，后端负责用户鉴权、文件与对话持久化、提示词管理，并以 SSE 方式转发上游 AI 响应。支持多用户隔离，每位用户使用自己的模型配置与提示词。
+A Node.js-based English reading assistant with AI integration, designed for multi-user environments with isolated data storage and streaming AI responses.
 
-## 功能与特性（全量清单）
+## 📋 Project Overview
 
-- 基于 `accessKey` 的多用户登录，Session 保持 7 天
-- 登录限流：15 分钟窗口最多 5 次失败尝试
-- CSRF 防护：Cookie + Header 双重校验
-- 支持 `.txt` / `.text` 上传、列表、读取、删除，允许中文文件名
-- 文件删除时同步清理该文章下的全部对话记录
-- 文章阅读区支持拖拽调节面板宽度、字体大小调整
-- 支持选词 / 选句 / 选段并触发 AI 功能
-- 朗读功能：基于 Web Speech API，可调语速/音量/音调
-- 文章上下文开关：可在问答中附带全文（最长 12000 字符）
-- 多轮对话持久化：按“文章 + 会话”维度分文件保存
-- 历史对话列表：按更新时间排序，可加载/删除
-- SSE 流式响应：逐 token 渲染 AI 输出
-- 上游 API 自动识别并适配
-- OpenAI Chat Completions
+Reading Helper is a full-stack web application that combines text file management, AI-powered language learning features, and multi-user authentication. The system provides a single-page frontend interface with a robust Express backend handling user authentication, file persistence, conversation history, and AI provider abstraction via Server-Sent Events (SSE).
+
+**Key Characteristics:**
+- Multi-user isolation with session-based authentication
+- Support for multiple AI providers (OpenAI, Anthropic)
+- Real-time streaming AI responses via SSE
+- Persistent conversation history per article
+- Customizable system prompts per user
+- File upload with Chinese filename support
+
+## 🏗️ Technical Architecture
+
+### System Layers
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Frontend (Single-Page Application)                     │
+│  • Static HTML/CSS/JS (~5300 lines)                     │
+│  • D3.js & Markmap for visualizations                   │
+│  • EventSource for SSE streaming                        │
+└─────────────────────────────────────────────────────────┘
+                          ↓ HTTP/SSE
+┌─────────────────────────────────────────────────────────┐
+│  Express Backend (Node.js)                              │
+│  ├─ Authentication Layer                                │
+│  │  • express-session + Redis                           │
+│  │  • CSRF protection (cookie + header)                 │
+│  │  • Rate limiting (15min/5 attempts)                  │
+│  ├─ Data Isolation Layer                                │
+│  │  • Per-user file storage                             │
+│  │  • Per-article conversation history                  │
+│  │  • User-specific prompt templates                    │
+│  └─ AI Provider Abstraction                             │
+│     • Auto-detection (OpenAI/Anthropic)                 │
+│     • SSE streaming proxy                               │
+│     • Request/response format adaptation                │
+└─────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────┐
+│  Storage & External Services                            │
+│  • Redis: Session persistence                           │
+│  • Filesystem: User data (uploads/chats/prompts)        │
+│  • Upstream AI APIs: OpenAI/Anthropic                   │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Technology Stack
+
+**Backend:**
+- Runtime: Node.js ≥18
+- Framework: Express 4.x
+- Session: express-session + connect-redis
+- Storage: Redis (sessions), Filesystem (user data)
+- Security: bcrypt, sanitize-html, express-rate-limit, CSRF protection
+- File Upload: multer
+- Compression: compression middleware
+
+**Frontend:**
+- Vanilla JavaScript (ES6+)
+- D3.js (data visualization)
+- Markmap (mind map rendering)
+- DOMPurify (client-side HTML sanitization)
+- Web Speech API (text-to-speech)
+
+**AI Integration:**
+- OpenAI Chat Completions API
 - OpenAI Responses API
 - Anthropic Messages API
-- 提示词管理：每用户拥有独立提示词副本
-- 默认提示词模板从 `config/prompts/` 首次自动拷贝
-- 前端支持提示词列表浏览、编辑、保存
-- 结构化输出渲染与交互
-- 语法分析 JSON → 树形结构渲染（可折叠）
-- 多项选择题 JSON → 可选项渲染与正确性提示
-- 判断题 JSON → True/False 交互
-- 开放题 JSON → 可展开答案
-- 思维导图 Markdown → Markmap 可视化
-- CET4/CET6 词汇标注：可一键标注/取消
-- 输出安全处理
-- 后端 `sanitize-html` 清洗 AI 输出
-- 前端 `DOMPurify` 二次清洗
-- 启动时自动清理不在配置文件中的“孤立用户数据”目录
 
-## 内置 AI 功能（基于提示词模板）
-
-- 单词解释（词性、音标、搭配、例句、同反义词）
-- 句子分析（语法结构、要点、改写、翻译）
-- 彩虹拆句（JSON 语法树 + 结构标注）
-- 段落翻译
-- 段落概括 + 概括评价
-- 文章思维导图
-- 全文开放题（10 题）
-- 全文多项选择题（10 题）
-- 全文判断题（10 题）
-- 通用问答（可选是否带文章上下文）
-
-## 技术架构（基本分析）
-
-整体分为三层：前端单页、后端 API、持久化与上游 AI。
+## 📁 Project Structure
 
 ```
-Browser (public/index.html)
-  |  静态资源 + JS 逻辑
-  |  登录 / 上传 / 对话 / SSE
-  v
-Express API (server/index.js)
-  |  Session (Redis)
-  |  文件/对话/提示词
-  |  AI 代理 (SSE)
-  v
-Storage & Upstream
-  - Redis: Session
-  - FS: data/users/<userId>/uploads, prompts, chats
-  - Upstream AI: OpenAI / Anthropic / 自建网关
-```
-
-关键模块说明：
-
-- `public/index.html`: 单文件前端（UI + 业务逻辑）
-- `server/index.js`: 路由、鉴权、上传、对话、AI 代理
-- `server/session-store.js`: Redis Session Store 初始化
-- `server/file-store.js`: 上传文件读写与校验
-- `server/chat-store.js`: 对话持久化、旧格式迁移、输出清洗
-- `server/prompt-store.js`: 提示词默认模板同步与读写
-- `server/user-paths.js`: 用户数据目录规划
-- `server/csrf-protection.js`: CSRF Cookie/Header 校验
-- `server/cleanup-orphaned-users.js`: 清理孤立用户目录
-
-## 目录结构
-
-```
-.
-├── config/
-│   ├── platform.config.json
-│   ├── users.config.json
-│   └── prompts/*.md
+reading-helper/
+├── config/                          # Configuration files
+│   ├── platform.config.json         # Session secret
+│   ├── users.config.json            # User credentials & AI provider configs
+│   └── prompts/                     # Default system prompt templates
+│       ├── explain-word.md
+│       ├── analyze-sentence.md
+│       ├── mcq.md
+│       └── ...
 ├── data/
-│   └── users/<userId>/{uploads,prompts,chats}/
+│   └── users/                       # User-isolated data storage
+│       └── <userId>/
+│           ├── uploads/             # Uploaded text files
+│           ├── chats/               # Conversation histories
+│           │   └── <articleBase64>/
+│           │       └── <uuid>.json
+│           └── prompts/             # User-edited prompts
+├── server/                          # Backend modules
+│   ├── index.js                     # Main Express app & routes
+│   ├── config-loader.js             # Config validation & loading
+│   ├── session-store.js             # Redis session store setup
+│   ├── file-store.js                # File upload/read/delete
+│   ├── chat-store.js                # Conversation persistence
+│   ├── prompt-store.js              # Prompt template management
+│   ├── user-paths.js                # User directory path resolution
+│   ├── csrf-protection.js           # CSRF token validation
+│   └── cleanup-orphaned-users.js    # Startup cleanup utility
 ├── public/
-│   └── index.html
-├── server/
-│   └── *.js
-├── ecosystem.config.js
-├── PM2_DEPLOYMENT.md
-└── package.json
+│   └── index.html                   # Single-page frontend (~5300 lines)
+├── logs/                            # PM2 log output (created at runtime)
+├── ecosystem.config.js              # PM2 cluster configuration
+├── package.json
+└── README.md
 ```
 
-## 运行环境
+## ✨ Core Features
 
-- Node.js >= 18
-- Redis >= 6
-- 可访问的上游 AI API
+### 🔐 Authentication & Security
+- Session-based authentication with 7-day persistence
+- Access key validation from `users.config.json`
+- Login rate limiting (5 attempts per 15 minutes)
+- CSRF protection via cookie + header validation
+- HTML sanitization (server: sanitize-html, client: DOMPurify)
+- Automatic cleanup of orphaned user directories on startup
 
-## 安装与启动
+### 📄 File Management
+- Upload `.txt` and `.text` files (max 2MB)
+- Chinese filename support with proper encoding
+- List, read, and delete operations
+- Automatic chat history cleanup on file deletion
+
+### 💬 Conversation System
+- Multi-turn conversation persistence per article
+- Conversation history stored as individual JSON files
+- List, create, append, clear, and delete operations
+- Automatic migration from legacy single-file format
+- Base64url-encoded article names for directory safety
+
+### 🤖 AI Integration
+- Automatic provider detection based on API URL pattern
+- Support for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages APIs
+- SSE streaming for real-time token-by-token rendering
+- 120-second request timeout
+- Per-user API configuration (URL, key, model)
+
+### 📝 Prompt Management
+- Default templates in `config/prompts/`
+- Automatic per-user copy on first access
+- User-editable prompts stored in `data/users/<userId>/prompts/`
+- Built-in templates:
+  - Word explanation (definitions, phonetics, collocations)
+  - Sentence analysis (grammar, structure, translation)
+  - Rainbow sentence parsing (JSON syntax tree)
+  - Paragraph translation & summarization
+  - Mind map generation
+  - Multiple-choice, true/false, and open-ended questions
+
+### 🎨 Frontend Features
+- Resizable reading panel with drag handles
+- Adjustable font size
+- Text selection triggers (word/sentence/paragraph)
+- Text-to-speech with adjustable speed/volume/pitch
+- Article context toggle (max 12,000 characters)
+- Structured output rendering:
+  - Syntax tree visualization (collapsible)
+  - Interactive quiz components
+  - Mind map rendering via Markmap
+- CET4/CET6 vocabulary highlighting
+
+## 🚀 PM2 Deployment
+
+### Prerequisites
+
+- Node.js ≥18
+- Redis ≥6
+- PM2 (install globally: `npm install -g pm2`)
+
+### Installation
 
 ```bash
+# Clone repository
+git clone <repository-url>
+cd reading-helper
+
+# Install dependencies
 npm install
-
-# 开发模式
-npm run dev
-
-# 生产模式
-CONFIG_DIR=./config USER_DATA_ROOT=./data/users REDIS_URL=redis://127.0.0.1:6379 npm start
 ```
 
-默认监听 `http://localhost:3000`。
+### Configuration
 
-## 配置文件
-
-### config/platform.config.json
+**1. Platform Configuration (`config/platform.config.json`):**
 
 ```json
 {
-  "session_secret": "REPLACE_WITH_REAL_SESSION_SECRET"
+  "session_secret": "REPLACE_WITH_STRONG_RANDOM_SECRET"
 }
 ```
 
-### config/users.config.json
+**2. User Configuration (`config/users.config.json`):**
 
 ```json
 {
   "users": [
     {
       "userId": "demo",
-      "accessKey": "REPLACE_WITH_REAL_USER_ACCESS_KEY",
+      "accessKey": "REPLACE_WITH_SECURE_ACCESS_KEY",
       "provider": {
-        "api_url": "https://your-provider.example.com/v1/chat/completions",
-        "api_key": "REPLACE_WITH_REAL_API_KEY",
+        "api_url": "https://api.openai.com/v1/chat/completions",
+        "api_key": "sk-...",
         "api_model": "gpt-4o"
       }
     }
@@ -147,65 +212,79 @@ CONFIG_DIR=./config USER_DATA_ROOT=./data/users REDIS_URL=redis://127.0.0.1:6379
 }
 ```
 
-规则要点：
+**Validation Rules:**
+- `userId`: Alphanumeric, underscore, and hyphen only
+- `accessKey`: Must be unique across all users
+- `api_url`: Auto-detects provider type (OpenAI/Anthropic)
 
-- `userId` 仅允许字母、数字、下划线、中划线
-- `accessKey` 不可重复
-- `provider.api_url` 自动识别 Chat Completions / Responses / Anthropic Messages
-
-## 常用环境变量
-
-- `PORT` 默认 3000
-- `CONFIG_DIR` 默认 `./config`
-- `USER_DATA_ROOT` 默认 `./data/users`
-- `DATA_DIR` 兼容旧参数，会映射为其父目录下的 `users`
-- `REDIS_URL` 必填，Redis 连接地址
-- `REDIS_SESSION_PREFIX` Session Key 前缀，默认 `reading-helper:sess:`
-- `MAX_UPLOAD_BYTES` 单次上传上限，默认 2MB
-- `SESSION_STORE_DIR` 预留：Session 文件目录（仅在未来改为文件存储时有用）
-- `TRUST_PROXY` Express trust proxy（支持 `true/false/数字`）
-
-## PM2 部署方式
-
-项目已提供 `ecosystem.config.js`，建议直接使用。
+**3. Environment Variables:**
 
 ```bash
-# 安装 PM2
-npm install -g pm2
+export REDIS_URL="redis://127.0.0.1:6379"
+export PORT=3000
+export CONFIG_DIR="./config"
+export USER_DATA_ROOT="./data/users"
+```
 
-# 安装依赖
-npm install
+### PM2 Startup
 
-# 启动
+```bash
+# Start in cluster mode (4 instances)
 pm2 start ecosystem.config.js
 
-# 查看状态/日志
+# View status
 pm2 list
+
+# View logs
 pm2 logs reading-helper
+
+# Monitor resources
+pm2 monit
 ```
 
-常用命令：
+### PM2 Management Commands
 
 ```bash
+# Restart application
 pm2 restart reading-helper
-pm2 stop reading-helper
-pm2 delete reading-helper
+
+# Reload with zero-downtime
 pm2 reload reading-helper
-```
 
-开机自启：
+# Stop application
+pm2 stop reading-helper
 
-```bash
+# Delete from PM2
+pm2 delete reading-helper
+
+# Save current process list
 pm2 save
+
+# Setup startup script
 pm2 startup
-# 按提示执行命令（可能需要 sudo）
+# Follow the displayed command (may require sudo)
 ```
 
-建议将 `REDIS_URL` 等敏感配置通过环境变量注入（避免写入仓库）。
+### Cluster Configuration
 
-## 反向代理建议（SSE 必须）
+The included `ecosystem.config.js` runs 4 instances by default. Adjust based on CPU cores:
 
-若使用 Nginx，请确保 SSE 不被缓冲：
+```javascript
+module.exports = {
+  apps: [{
+    name: 'reading-helper',
+    script: './server/index.js',
+    instances: 'max',  // Use all available CPU cores
+    exec_mode: 'cluster',
+    max_memory_restart: '500M',
+    // ...
+  }]
+};
+```
+
+### Reverse Proxy (Nginx)
+
+For SSE streaming to work correctly, disable buffering:
 
 ```nginx
 location / {
@@ -215,47 +294,109 @@ location / {
   proxy_set_header X-Real-IP $remote_addr;
   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   proxy_set_header X-Forwarded-Proto $scheme;
+  
+  # Critical for SSE
   proxy_buffering off;
   proxy_read_timeout 86400;
 }
 ```
 
-## 常见问题与解决方案
+## 🔧 Common Issues
 
-- 启动时报错 `缺少 REDIS_URL`
-解决：设置 `REDIS_URL` 环境变量并确保 Redis 可连接。
+### Redis Connection Errors
 
-- 登录/请求提示 `CSRF token 缺失/验证失败`
-解决：确保前端能正常写入 Cookie；反向代理需保留 `Set-Cookie` 与 `Cookie` 头；跨域访问请保持同域或配置正确的 `Origin` 与 `credentials`。
+**Symptom:** `缺少 REDIS_URL 环境变量` or connection timeout
 
-- SSE 无法流式输出或经常中断
-解决：关闭代理缓冲（Nginx `proxy_buffering off`），并提高 `proxy_read_timeout`。
+**Solution:**
+- Ensure `REDIS_URL` environment variable is set
+- Verify Redis is running: `redis-cli ping` (should return `PONG`)
+- Check Redis connection string format: `redis://host:port` or `redis://user:pass@host:port`
 
-- AI 响应为空或解析失败
-解决：检查上游 `api_url` 是否为 Chat Completions / Responses / Anthropic Messages 的正确地址；确认 `api_key` 与 `api_model`。
+### CSRF Token Validation Failures
 
-- “思维导图”无法打开
-解决：检查 `markmap-view` 与 `d3` CDN 是否可访问；或自行改为本地静态资源。
+**Symptom:** `CSRF token 缺失/验证失败` on login or API requests
 
-- 朗读按钮不可用
-解决：浏览器需支持 Web Speech API（建议 Chrome / Edge / Safari）。
+**Solution:**
+- Ensure cookies are enabled in browser
+- Check reverse proxy preserves `Set-Cookie` and `Cookie` headers
+- For cross-origin requests, configure CORS properly and use `credentials: 'include'`
+- Clear browser cookies and retry
 
-- 词汇标注无效
-解决：确认 `config/cet_word_list.txt` 存在，并且接口 `/api/cet-word-list` 未被代理拦截。
+### SSE Streaming Issues
 
-- 提示词保存失败（403）
-解决：前端请求中 `userId` 必须与 Session 中一致，检查是否多用户混用或 Cookie 丢失。
+**Symptom:** AI responses not streaming or frequent disconnections
 
-## 推荐服务器配置
+**Solution:**
+- Disable proxy buffering in Nginx/Apache (see reverse proxy config above)
+- Increase `proxy_read_timeout` to at least 120 seconds
+- Check browser console for EventSource errors
+- Verify upstream AI API is accessible
 
-以下为单实例（PM2 Cluster 可按核数扩展）的建议配置：
+### AI Response Errors
 
-- 轻量体验（1-5 用户并发）：2 vCPU / 2 GB RAM / 20 GB SSD
-- 小团队（5-20 用户并发）：4 vCPU / 4-8 GB RAM / 40 GB SSD
-- 中等规模（20-50 用户并发）：8 vCPU / 16 GB RAM / 80 GB SSD
+**Symptom:** Empty responses or parsing failures
 
-Redis 建议独立部署或使用托管服务，避免与应用进程争抢内存。
+**Solution:**
+- Verify `api_url` points to correct endpoint:
+  - OpenAI: `https://api.openai.com/v1/chat/completions`
+  - Anthropic: `https://api.anthropic.com/v1/messages`
+- Confirm `api_key` is valid and has sufficient quota
+- Check `api_model` is supported by the provider
+- Review server logs for detailed error messages
 
-## License
+### File Upload Failures
+
+**Symptom:** Upload rejected or file not appearing in list
+
+**Solution:**
+- Verify file extension is `.txt` or `.text`
+- Check file size is under 2MB (configurable via `MAX_UPLOAD_BYTES`)
+- Ensure `data/users/<userId>/uploads/` directory exists and is writable
+- Review filename for invalid characters (should be sanitized automatically)
+
+### Mind Map Not Rendering
+
+**Symptom:** Mind map button does nothing or shows blank modal
+
+**Solution:**
+- Check browser console for CDN loading errors
+- Verify `markmap-view` and `d3` CDN URLs are accessible
+- Consider hosting these libraries locally if CDN is blocked
+- Ensure AI response contains valid Markdown format
+
+### Text-to-Speech Unavailable
+
+**Symptom:** Read aloud button disabled or not working
+
+**Solution:**
+- Use a browser with Web Speech API support (Chrome, Edge, Safari recommended)
+- Check browser permissions for speech synthesis
+- Verify page is served over HTTPS (required by some browsers)
+
+### Prompt Save Failures (403)
+
+**Symptom:** `userId 参数不一致` or permission denied
+
+**Solution:**
+- Ensure `userId` in request matches session user
+- Check session hasn't expired (7-day limit)
+- Verify user exists in `users.config.json`
+- Clear cookies and re-login if session is corrupted
+
+## 📊 Recommended Server Specifications
+
+| Scenario | vCPU | RAM | Storage | Concurrent Users |
+|----------|------|-----|---------|------------------|
+| Development/Testing | 2 | 2 GB | 20 GB | 1-5 |
+| Small Team | 4 | 4-8 GB | 40 GB | 5-20 |
+| Medium Organization | 8 | 16 GB | 80 GB | 20-50 |
+
+**Notes:**
+- Redis should be deployed separately or use managed service for production
+- Storage requirements scale with uploaded files and conversation history
+- PM2 cluster mode scales horizontally with CPU cores
+- Consider load balancer for >50 concurrent users
+
+## 📜 License
 
 MIT
