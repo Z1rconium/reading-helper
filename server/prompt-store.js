@@ -7,6 +7,9 @@ const { getUserPromptDir } = require('./user-paths');
 
 const MAX_PROMPT_NAME_LENGTH = 128;
 
+// 记录已同步过的用户，避免重复检查
+const syncedUsers = new Set();
+
 function getDefaultPromptDir() {
   return path.join(getConfigDir(), 'prompts');
 }
@@ -41,6 +44,12 @@ async function ensureUserPromptDir(userId) {
 
 async function syncDefaultPrompts(userId) {
   const promptDir = await ensureUserPromptDir(userId);
+
+  // 如果已经同步过，直接返回
+  if (syncedUsers.has(userId)) {
+    return promptDir;
+  }
+
   const defaultPromptDir = await ensurePromptDir();
   const entries = await fs.readdir(defaultPromptDir, { withFileTypes: true });
 
@@ -61,6 +70,8 @@ async function syncDefaultPrompts(userId) {
     }
   }
 
+  // 标记该用户已同步
+  syncedUsers.add(userId);
   return promptDir;
 }
 

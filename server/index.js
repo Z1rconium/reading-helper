@@ -44,6 +44,9 @@ const LOGIN_MAX_ATTEMPTS = 5;
 const TRUST_PROXY_ENV = process.env.TRUST_PROXY;
 const AI_REQUEST_TIMEOUT_MS = 120000; // 120 秒超时
 
+// CET词表缓存
+let cetWordListCache = null;
+
 function parseTrustProxy(value) {
   if (typeof value !== 'string') {
     return null;
@@ -269,9 +272,13 @@ function getUpstreamDelta(parsed) {
   return '';
 }
 
-async function readCetWordList() {
+async function loadCetWordList() {
+  if (cetWordListCache !== null) {
+    return cetWordListCache;
+  }
   const filePath = path.join(getConfigDir(), 'cet_word_list.txt');
-  return fs.readFile(filePath, 'utf8');
+  cetWordListCache = await fs.readFile(filePath, 'utf8');
+  return cetWordListCache;
 }
 
 function relayUpstreamChunk(chunk, res) {
@@ -341,6 +348,14 @@ async function bootstrap() {
   if (shouldCleanup) {
     const validUserIds = users.map((user) => user.userId);
     await cleanupOrphanedUsers(validUserIds);
+  }
+
+  // 预加载 CET 词表到内存
+  try {
+    await loadCetWordList();
+    console.log('[Cache] CET 词表已加载到内存');
+  } catch (error) {
+    console.warn('[Cache] CET 词表加载失败:', error.message);
   }
 
   app.set('trust proxy', resolvedTrustProxy);
@@ -490,7 +505,7 @@ async function bootstrap() {
 
   app.get('/api/cet-word-list', requireAuth, async (req, res) => {
     try {
-      const content = await readCetWordList();
+      const content = await loadCetWordList();
       return res.json({ content });
     } catch (error) {
       if (error.code === 'ENOENT') {
@@ -706,7 +721,12 @@ async function bootstrap() {
     }
   });
 
-  app.use(express.static(path.join(process.cwd(), 'public')));
+  app.use(express.static(path.join(process.cwd(), 'public'), {
+    maxAge: '1d',           // 缓存1天
+    etag: true,             // 启用ETag
+    lastModified: true,     // 启用Last-Modified
+    immutable: false        // 非永久缓存
+  }));
 
   app.listen(PORT, () => {
     console.log(`Reading Helper server listening on http://localhost:${PORT}`);

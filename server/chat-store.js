@@ -316,12 +316,11 @@ async function listConversations(userId, articleName) {
   assertValidArticleName(articleName);
   await migrateLegacyStoreIfNeeded(userId, articleName);
   const ids = await listConversationFiles(userId, articleName);
-  const conversations = [];
 
-  for (const id of ids) {
-    const conversation = await readConversation(userId, articleName, id);
-    conversations.push(conversation);
-  }
+  // 并发读取所有对话文件
+  const conversations = await Promise.all(
+    ids.map(id => readConversation(userId, articleName, id))
+  );
 
   sortConversationsByUpdatedAt(conversations);
   return conversations.map(toConversationSummary);
