@@ -412,7 +412,7 @@ async function bootstrap() {
     limits: { fileSize: MAX_UPLOAD_BYTES },
     fileFilter: (req, file, cb) => {
       if (!hasAllowedTextExtension(file.originalname)) {
-        return cb(new Error('仅支持 .txt 或 .text 文件'));
+        return cb(new Error('仅支持 .txt、.text 或 .md 文件'));
       }
       cb(null, true);
     }

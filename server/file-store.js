@@ -3,7 +3,7 @@ const path = require('path');
 const { getUserUploadDir } = require('./user-paths');
 
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
-const ALLOWED_EXTENSIONS = new Set(['.txt', '.text']);
+const ALLOWED_EXTENSIONS = new Set(['.txt', '.text', '.md']);
 
 function hasAllowedTextExtension(fileName) {
   const ext = path.extname(String(fileName || '')).toLowerCase();
@@ -30,7 +30,7 @@ function normalizeUploadName(originalName) {
     throw new Error('无效文件名');
   }
   if (!hasAllowedTextExtension(cleaned)) {
-    throw new Error('仅支持 .txt 或 .text 文件');
+    throw new Error('仅支持 .txt、.text 或 .md 文件');
   }
   if (!isValidRequestedName(cleaned)) {
     throw new Error('文件名包含非法字符');
