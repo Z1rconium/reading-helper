@@ -174,6 +174,7 @@
         let heartbeatTimerId = 0;
         let heartbeatInFlight = false;
         const mindmapCache = new Map();
+        let markmapTransformer = null;
         let currentMindmapInstance = null;
         let currentMindmapData = null;
 
@@ -1337,10 +1338,22 @@
 
         // Handle window resize for mindmap
         const handleMindmapResize = debounce(() => {
-            if (mindmapModal.style.display === 'flex' && currentMindmapData) {
-                renderMindmap(currentMindmapData).catch(err => {
-                    console.error('Resize render failed:', err);
-                });
+            if (mindmapModal.style.display === 'flex' && currentMindmapInstance) {
+                // Only adjust size and fit, don't re-render
+                const containerWidth = mindmapStage.clientWidth;
+                const containerHeight = mindmapStage.clientHeight;
+                const svg = mindmapStage.querySelector('svg');
+
+                if (svg) {
+                    const width = Math.max(containerWidth - 24, 600);
+                    const height = Math.max(containerHeight - 24, 400);
+                    svg.setAttribute('width', String(width));
+                    svg.setAttribute('height', String(height));
+
+                    if (typeof currentMindmapInstance.fit === 'function') {
+                        currentMindmapInstance.fit();
+                    }
+                }
             }
         }, 300);
 
@@ -2418,6 +2431,10 @@
                 const hasTransformer = Boolean(markmapGlobal?.Transformer);
 
                 if (hasD3 && hasMarkmap && hasTransformer) {
+                    // Initialize singleton Transformer instance
+                    if (!markmapTransformer) {
+                        markmapTransformer = new markmapGlobal.Transformer();
+                    }
                     return markmapGlobal;
                 }
 
@@ -2521,14 +2538,14 @@
         }
 
         function scheduleMindmapVisualStyles() {
+            // Apply styles once immediately, then once after DOM updates
             applyMindmapVisualStyles();
             requestAnimationFrame(() => applyMindmapVisualStyles());
-            window.setTimeout(() => applyMindmapVisualStyles(), 320);
         }
 
         function getMindmapRenderOptions() {
             return {
-                autoFit: true,
+                autoFit: false,
                 duration: 300,
                 fitRatio: 0.95,
                 maxWidth: 300,
@@ -2548,11 +2565,10 @@
             }
 
             const markmap = await ensureMarkmapReady();
-            const { Transformer, Markmap } = markmap;
+            const { Markmap } = markmap;
 
-            // Use official transformer instead of manual parsing
-            const transformer = new Transformer();
-            const { root } = transformer.transform(content);
+            // Use singleton transformer instance
+            const { root } = markmapTransformer.transform(content);
 
             mindmapStage.innerHTML = '';
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -2620,30 +2636,34 @@
             requestAnimationFrame(async () => {
                 try {
                     if (mindmapCache.has(cacheKey)) {
-                        // Use cached HTML
-                        mindmapStage.innerHTML = mindmapCache.get(cacheKey);
+                        // Use cached root data
+                        const cachedData = mindmapCache.get(cacheKey);
+                        mindmapStage.innerHTML = cachedData.html;
                         mindmapStatus.textContent = '';
                         document.getElementById('mindmap-toolbar').style.display = 'flex';
 
-                        // Recreate Markmap instance for interactivity
+                        // Recreate Markmap instance for interactivity using cached root
                         const markmap = await ensureMarkmapReady();
-                        const { Transformer, Markmap } = markmap;
-                        const transformer = new Transformer();
-                        const { root } = transformer.transform(content);
+                        const { Markmap } = markmap;
                         const svg = mindmapStage.querySelector('svg');
 
                         if (svg) {
-                            currentMindmapInstance = Markmap.create(svg, getMindmapRenderOptions(), root);
+                            currentMindmapInstance = Markmap.create(svg, getMindmapRenderOptions(), cachedData.root);
                             currentMindmapData = content;
                             scheduleMindmapVisualStyles();
                         }
                     } else {
                         // Render fresh
+                        await ensureMarkmapReady();
+                        const { root } = markmapTransformer.transform(content);
                         await renderMindmap(content);
                         mindmapStatus.textContent = '';
 
-                        // Cache the rendered HTML
-                        mindmapCache.set(cacheKey, mindmapStage.innerHTML);
+                        // Cache both HTML and parsed root data
+                        mindmapCache.set(cacheKey, {
+                            html: mindmapStage.innerHTML,
+                            root: root
+                        });
 
                         // Limit cache size to 10 items
                         if (mindmapCache.size > 10) {
