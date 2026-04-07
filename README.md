@@ -85,8 +85,15 @@ reading-helper/
 │   └── prompts/                     # Default system prompt templates
 │       ├── explain-word.md
 │       ├── analyze-sentence.md
+│       ├── color-sentence.md
+│       ├── summarize-paragraph.md
+│       ├── translate-paragraph.md
+│       ├── summary-evaluation.md
 │       ├── mcq.md
-│       └── ...
+│       ├── qa.md
+│       ├── tf.md
+│       ├── mindmap.md
+│       └── send-button.md
 ├── data/
 │   └── users/                       # User-isolated data storage
 │       └── <userId>/
@@ -152,8 +159,10 @@ reading-helper/
   - Sentence analysis (grammar, structure, translation)
   - Rainbow sentence parsing (JSON syntax tree)
   - Paragraph translation & summarization
+  - Summary evaluation
   - Mind map generation
   - Multiple-choice, true/false, and open-ended questions
+  - Send button (general Q&A)
 
 ### 🎨 Frontend Features
 - Resizable reading panel with drag handles

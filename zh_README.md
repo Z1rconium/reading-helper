@@ -85,8 +85,15 @@ reading-helper/
 │   └── prompts/                     # 默认系统提示词模板
 │       ├── explain-word.md
 │       ├── analyze-sentence.md
+│       ├── color-sentence.md
+│       ├── summarize-paragraph.md
+│       ├── translate-paragraph.md
+│       ├── summary-evaluation.md
 │       ├── mcq.md
-│       └── ...
+│       ├── qa.md
+│       ├── tf.md
+│       ├── mindmap.md
+│       └── send-button.md
 ├── data/
 │   └── users/                       # 用户隔离数据存储
 │       └── <userId>/
@@ -152,8 +159,10 @@ reading-helper/
   - 句子分析（语法、结构、翻译）
   - 彩虹拆句（JSON 语法树）
   - 段落翻译和概括
+  - 概括评估
   - 思维导图生成
   - 多项选择题、判断题和开放题
+  - 发送按钮（通用问答）
 
 ### 🎨 前端功能
 - 可调整大小的阅读面板，带拖动手柄
