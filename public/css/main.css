@@ -1534,6 +1534,13 @@
             display: block;
         }
 
+        .mindmap-stage svg .markmap-foreign,
+        .mindmap-stage svg .markmap-foreign > div,
+        .mindmap-stage svg .markmap-foreign > div > div,
+        .mindmap-stage svg .markmap-foreign * {
+            font-family: var(--font-ui) !important;
+        }
+
         .mindmap-toolbar {
             display: flex;
             gap: 8px;

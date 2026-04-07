@@ -2524,6 +2524,7 @@
         const MINDMAP_BRANCH_COLORS = ['#5B8FF9', '#5AD8A6', '#5D7092', '#F6BD16', '#E86452', '#6DC8EC', '#945FB9', '#FF9845'];
         const MINDMAP_BASE_TEXT_COLOR = '#3A2D22';
         const MINDMAP_ROOT_FILL = '#FFF6E8';
+        const MINDMAP_FONT_FAMILY = '"Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
 
         function getMindmapNodeDepth(node) {
             return Number(node?.state?.depth ?? node?.depth ?? node?.dataset?.depth ?? 0);
@@ -2552,10 +2553,25 @@
             return `#${[0, 2, 4].map((index) => mixChannel(index).toString(16).padStart(2, '0')).join('')}`;
         }
 
+        function getMindmapGlobalStyle() {
+            return `
+                .markmap {
+                    --markmap-font: 520 14px/1.45 ${MINDMAP_FONT_FAMILY};
+                    --markmap-text-color: ${MINDMAP_BASE_TEXT_COLOR};
+                }
+                .markmap .markmap-foreign,
+                .markmap .markmap-foreign > div,
+                .markmap .markmap-foreign > div > div {
+                    font-family: ${MINDMAP_FONT_FAMILY};
+                }
+            `;
+        }
+
         function getMindmapTextStyle(depth, branchColor) {
             if (depth <= 1) {
                 return {
                     color: MINDMAP_BASE_TEXT_COLOR,
+                    fontFamily: MINDMAP_FONT_FAMILY,
                     fontSize: '18px',
                     fontWeight: '700',
                     letterSpacing: '0.01em'
@@ -2565,6 +2581,7 @@
             if (depth === 2) {
                 return {
                     color: mixMindmapColors(branchColor, MINDMAP_BASE_TEXT_COLOR, 0.35),
+                    fontFamily: MINDMAP_FONT_FAMILY,
                     fontSize: '15px',
                     fontWeight: '650',
                     letterSpacing: '0.005em'
@@ -2573,10 +2590,23 @@
 
             return {
                 color: mixMindmapColors(branchColor, MINDMAP_BASE_TEXT_COLOR, 0.55),
+                fontFamily: MINDMAP_FONT_FAMILY,
                 fontSize: '14px',
                 fontWeight: '520',
                 letterSpacing: '0'
             };
+        }
+
+        function applyMindmapLabelTextStyles(label, textStyle) {
+            if (!label || !textStyle) {
+                return;
+            }
+
+            label.style.setProperty('color', textStyle.color, 'important');
+            label.style.setProperty('font-family', textStyle.fontFamily, 'important');
+            label.style.setProperty('font-size', textStyle.fontSize, 'important');
+            label.style.setProperty('font-weight', textStyle.fontWeight, 'important');
+            label.style.setProperty('letter-spacing', textStyle.letterSpacing, 'important');
         }
 
         function applyMindmapVisualStyles() {
@@ -2601,10 +2631,10 @@
 
                 if (label) {
                     const textStyle = getMindmapTextStyle(depth, branchColor);
-                    label.style.color = textStyle.color;
-                    label.style.fontSize = textStyle.fontSize;
-                    label.style.fontWeight = textStyle.fontWeight;
-                    label.style.letterSpacing = textStyle.letterSpacing;
+                    applyMindmapLabelTextStyles(label, textStyle);
+                    label.querySelectorAll('*').forEach((child) => {
+                        applyMindmapLabelTextStyles(child, textStyle);
+                    });
                 }
             });
         }
@@ -2626,7 +2656,8 @@
                 spacingHorizontal: 80,
                 color: (node) => {
                     return getMindmapBranchColor(node);
-                }
+                },
+                style: () => getMindmapGlobalStyle()
             };
         }
 
@@ -2646,16 +2677,16 @@
             instance.toggleNode = async (...args) => {
                 const beforeTransform = getMindmapZoomTransform(svg);
                 const result = await originalToggleNode(...args);
+                const transitionDuration = Number(instance.options?.duration) || 0;
+                const restoreMindmapState = () => {
+                    scheduleMindmapVisualStyles();
+                    if (beforeTransform) {
+                        applyMindmapZoomTransform(instance, svg, beforeTransform);
+                    }
+                };
 
-                if (beforeTransform) {
-                    const transitionDuration = Number(instance.options?.duration) || 0;
-                    requestAnimationFrame(() => {
-                        applyMindmapZoomTransform(instance, svg, beforeTransform);
-                    });
-                    window.setTimeout(() => {
-                        applyMindmapZoomTransform(instance, svg, beforeTransform);
-                    }, transitionDuration + 24);
-                }
+                requestAnimationFrame(restoreMindmapState);
+                window.setTimeout(restoreMindmapState, transitionDuration + 24);
 
                 return result;
             };
