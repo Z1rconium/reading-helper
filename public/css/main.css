@@ -1773,6 +1773,12 @@
             text-transform: uppercase;
         }
 
+        .auth-input-group .cf-turnstile {
+            display: flex;
+            justify-content: center;
+            margin: 0 auto;
+        }
+
         .input-wrapper {
             position: relative;
         }
@@ -1812,6 +1818,13 @@
             display: flex;
             justify-content: center;
             align-items: center;
+            transition: opacity 0.3s ease;
+        }
+
+        .auth-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
         }
 
         .btn-glow {

@@ -144,6 +144,7 @@
         const loginBtn = document.getElementById('login-btn');
         const authError = document.getElementById('auth-error');
         const logoutBtn = document.getElementById('logout-btn');
+        let turnstileToken = '';
         const serverFiles = new Set();
         const defaultTextContentHtml = '<p>请上传一个文本文件。</p><p>您可以选择单词、句子或段落，然后在右侧与AI助手交互。</p>';
         let contextMenuFileName = '';
@@ -442,6 +443,13 @@
         async function login() {
             const accessKey = accessKeyInput.value.trim();
             if (!accessKey) {
+                authError.textContent = '请输入访问 Key';
+                authError.style.display = 'block';
+                return;
+            }
+
+            if (!turnstileToken) {
+                authError.textContent = '请完成人机验证';
                 authError.style.display = 'block';
                 return;
             }
@@ -454,14 +462,22 @@
                         'Content-Type': 'application/json',
                         'X-CSRF-Token': getCsrfToken()
                     },
-                    body: JSON.stringify({ accessKey })
+                    body: JSON.stringify({ accessKey, turnstileToken })
                 });
 
                 if (response.status === 401) {
+                    authError.textContent = '访问 Key 无效，请重试。';
                     authError.style.display = 'block';
+                    resetTurnstile();
                     return;
                 }
-                if (!response.ok) throw new Error(`登录失败: ${response.status}`);
+                if (!response.ok) {
+                    const data = await response.json();
+                    authError.textContent = data.error || `登录失败: ${response.status}`;
+                    authError.style.display = 'block';
+                    resetTurnstile();
+                    return;
+                }
 
                 const data = await response.json();
                 const nextUserId = typeof data.userId === 'string' ? data.userId : '';
@@ -1249,6 +1265,27 @@
             }
         });
         logoutBtn.addEventListener('click', logout);
+
+        // Turnstile callbacks
+        window.onTurnstileSuccess = function(token) {
+            turnstileToken = token;
+            loginBtn.disabled = false;
+        };
+
+        window.onTurnstileError = function() {
+            turnstileToken = '';
+            loginBtn.disabled = true;
+            authError.textContent = '人机验证失败，请刷新页面重试';
+            authError.style.display = 'block';
+        };
+
+        function resetTurnstile() {
+            turnstileToken = '';
+            loginBtn.disabled = true;
+            if (window.turnstile) {
+                window.turnstile.reset();
+            }
+        }
         fileList.addEventListener('contextmenu', (event) => {
             const item = event.target.closest('li');
             if (!item || !fileList.contains(item)) {

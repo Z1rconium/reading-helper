@@ -32,6 +32,7 @@ Reading Helper 是一个全栈 Web 应用程序，结合了文本文件管理、
 │  Express 后端（Node.js）                                │
 │  ├─ 认证层                                              │
 │  │  • express-session + Redis                           │
+│  │  • Cloudflare Turnstile 人机验证                     │
 │  │  • CSRF 防护（cookie + header）                      │
 │  │  • 速率限制（15分钟/5次尝试）                        │
 │  ├─ 数据隔离层                                          │
@@ -123,8 +124,9 @@ reading-helper/
 ## ✨ 核心功能
 
 ### 🔐 认证与安全
-- 基于会话的认证，7 天持久化
+- 基于会话的认证，30 分钟持久化
 - 从 `users.config.json` 验证访问密钥
+- **登录页面集成 Cloudflare Turnstile 人机验证**
 - 登录速率限制（15 分钟内最多 5 次尝试）
 - 通过 cookie + header 验证实现 CSRF 防护
 - HTML 清洗（服务端：sanitize-html，客户端：DOMPurify）
@@ -228,7 +230,18 @@ npm install
 - `accessKey`：所有用户中必须唯一
 - `api_url`：自动检测提供商类型（OpenAI/Anthropic）
 
-**3. 环境变量：**
+**3. Cloudflare Turnstile 配置：**
+
+应用程序在登录页面使用 Cloudflare Turnstile 进行人机验证。站点密钥和密钥配置在：
+- **前端**（`public/index.html`）：站点密钥在 `data-sitekey` 属性中
+- **后端**（`server/index.js`）：密钥在登录路由处理器中
+
+使用您自己的 Turnstile 密钥：
+1. 在 [Cloudflare 控制台](https://dash.cloudflare.com/?to=/:account/turnstile) 创建 Turnstile 站点
+2. 替换 `public/index.html` 中的站点密钥（第 152 行）
+3. 替换 `server/index.js` 中的密钥（第 467 行）
+
+**4. 环境变量：**
 
 ```bash
 export REDIS_URL="redis://127.0.0.1:6379"

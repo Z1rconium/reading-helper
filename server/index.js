@@ -445,8 +445,36 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/auth/login', loginRateLimiter, (req, res) => {
+  app.post('/api/auth/login', loginRateLimiter, async (req, res) => {
     const inputKey = typeof req.body?.accessKey === 'string' ? req.body.accessKey.trim() : '';
+    const turnstileToken = typeof req.body?.turnstileToken === 'string' ? req.body.turnstileToken.trim() : '';
+
+    // 验证 Turnstile token
+    if (!turnstileToken) {
+      return res.status(400).json({ authenticated: false, error: '缺少人机验证' });
+    }
+
+    try {
+      const verifyResponse = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          secret: '0x4AAAAAAC1l16apeYmZOjyzq4DX8Em8ZcI',
+          response: turnstileToken
+        })
+      });
+
+      const verifyData = await verifyResponse.json();
+      if (!verifyData.success) {
+        return res.status(400).json({ authenticated: false, error: '人机验证失败' });
+      }
+    } catch (error) {
+      console.error('Turnstile 验证失败:', error);
+      return res.status(500).json({ authenticated: false, error: '人机验证服务异常' });
+    }
+
     const user = inputKey ? usersByAccessKey.get(inputKey) : null;
 
     if (!user) {

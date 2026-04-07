@@ -150,8 +150,11 @@
                         <input type="password" id="access-key" placeholder="请输入访问 Key" autocomplete="off">
                     </div>
                 </div>
+                <div class="form-group auth-input-group">
+                    <div id="turnstile-widget" class="cf-turnstile" data-sitekey="0x4AAAAAAC1l13SLEfc-2Yg6" data-callback="onTurnstileSuccess" data-error-callback="onTurnstileError"></div>
+                </div>
                 <div class="modal-footer auth-footer">
-                    <button class="save-btn auth-btn" id="login-btn" type="button">
+                    <button class="save-btn auth-btn" id="login-btn" type="button" disabled>
                         <span>登录验证</span>
                         <div class="btn-glow"></div>
                     </button>
@@ -214,10 +217,11 @@
             <div id="mindmap-stage" class="mindmap-stage"></div>
         </div>
     </div>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/markmap-lib@0.18.12/dist/browser/index.iife.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/markmap-view@0.18.12/dist/browser/index.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
-    <script src="/js/app.js?v=20260407-2"></script>
+    <script src="/js/app.js?v=20260407-3"></script>
 </body>
 </html>

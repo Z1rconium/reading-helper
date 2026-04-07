@@ -32,6 +32,7 @@ Reading Helper is a full-stack web application that combines text file managemen
 │  Express Backend (Node.js)                              │
 │  ├─ Authentication Layer                                │
 │  │  • express-session + Redis                           │
+│  │  • Cloudflare Turnstile verification                 │
 │  │  • CSRF protection (cookie + header)                 │
 │  │  • Rate limiting (15min/5 attempts)                  │
 │  ├─ Data Isolation Layer                                │
@@ -123,8 +124,9 @@ reading-helper/
 ## ✨ Core Features
 
 ### 🔐 Authentication & Security
-- Session-based authentication with 7-day persistence
+- Session-based authentication with 30-minute persistence
 - Access key validation from `users.config.json`
+- **Cloudflare Turnstile human verification** on login page
 - Login rate limiting (5 attempts per 15 minutes)
 - CSRF protection via cookie + header validation
 - HTML sanitization (server: sanitize-html, client: DOMPurify)
@@ -228,7 +230,18 @@ npm install
 - `accessKey`: Must be unique across all users
 - `api_url`: Auto-detects provider type (OpenAI/Anthropic)
 
-**3. Environment Variables:**
+**3. Cloudflare Turnstile Configuration:**
+
+The application uses Cloudflare Turnstile for human verification on the login page. The site key and secret key are configured in:
+- **Frontend** (`public/index.html`): Site key in `data-sitekey` attribute
+- **Backend** (`server/index.js`): Secret key in login route handler
+
+To use your own Turnstile keys:
+1. Create a Turnstile site at [Cloudflare Dashboard](https://dash.cloudflare.com/?to=/:account/turnstile)
+2. Replace the site key in `public/index.html` (line 152)
+3. Replace the secret key in `server/index.js` (line 467)
+
+**4. Environment Variables:**
 
 ```bash
 export REDIS_URL="redis://127.0.0.1:6379"
@@ -332,6 +345,18 @@ location / {
 - Check reverse proxy preserves `Set-Cookie` and `Cookie` headers
 - For cross-origin requests, configure CORS properly and use `credentials: 'include'`
 - Clear browser cookies and retry
+
+### Turnstile Verification Failures
+
+**Symptom:** Login button remains disabled or shows "人机验证失败"
+
+**Solution:**
+- Verify Cloudflare Turnstile site key is correct in `public/index.html`
+- Confirm secret key matches in `server/index.js`
+- Check browser console for Turnstile loading errors
+- Ensure `challenges.cloudflare.com` is accessible (not blocked by firewall/ad blocker)
+- Try refreshing the page to reload Turnstile widget
+- Verify Turnstile site domain matches your deployment domain in Cloudflare Dashboard
 
 ### SSE Streaming Issues
 
