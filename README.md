@@ -6,15 +6,16 @@ A Node.js-based English reading assistant with AI integration, designed for mult
 
 ## 📋 Project Overview
 
-Reading Helper is a full-stack web application that combines text file management, AI-powered language learning features, and multi-user authentication. The system provides a single-page frontend interface with a robust Express backend handling user authentication, file persistence, conversation history, and AI provider abstraction via Server-Sent Events (SSE).
+Reading Helper is a full-stack web application that combines text file management, AI-powered language learning features, and multi-user authentication. The system provides a modern single-page application frontend with a robust Express backend handling user authentication, file persistence, conversation history, and AI provider abstraction via Server-Sent Events (SSE).
 
 **Key Characteristics:**
 - Multi-user isolation with session-based authentication
-- Support for multiple AI providers (OpenAI, Anthropic)
+- Support for multiple AI providers (OpenAI Chat Completions, OpenAI Responses, Anthropic Messages)
 - Real-time streaming AI responses via SSE
 - Persistent conversation history per article
 - Customizable system prompts per user
 - File upload with Chinese filename support
+- CET4/CET6 vocabulary highlighting
 
 ## 🏗️ Technical Architecture
 
@@ -23,13 +24,13 @@ Reading Helper is a full-stack web application that combines text file managemen
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Frontend (Single-Page Application)                     │
-│  • Static HTML/CSS/JS (~5300 lines)                     │
+│  • HTML (227 lines) + CSS (2252 lines) + JS (3643 lines)│
 │  • D3.js & Markmap for visualizations                   │
 │  • EventSource for SSE streaming                        │
 └─────────────────────────────────────────────────────────┘
                           ↓ HTTP/SSE
 ┌─────────────────────────────────────────────────────────┐
-│  Express Backend (Node.js)                              │
+│  Express Backend (Node.js, 864 lines)                   │
 │  ├─ Authentication Layer                                │
 │  │  • express-session + Redis                           │
 │  │  • Cloudflare Turnstile verification                 │
@@ -41,13 +42,13 @@ Reading Helper is a full-stack web application that combines text file managemen
 │  │  • User-specific prompt templates                    │
 │  └─ AI Provider Abstraction                             │
 │     • Auto-detection (OpenAI/Anthropic)                 │
-│     • SSE streaming proxy                               │
+│     • SSE streaming proxy with connection pooling       │
 │     • Request/response format adaptation                │
 └─────────────────────────────────────────────────────────┘
                           ↓
 ┌─────────────────────────────────────────────────────────┐
 │  Storage & External Services                            │
-│  • Redis: Session persistence                           │
+│  • Redis: Session persistence (30-minute timeout)       │
 │  • Filesystem: User data (uploads/chats/prompts)        │
 │  • Upstream AI APIs: OpenAI/Anthropic                   │
 └─────────────────────────────────────────────────────────┘
@@ -60,9 +61,10 @@ Reading Helper is a full-stack web application that combines text file managemen
 - Framework: Express 4.x
 - Session: express-session + connect-redis
 - Storage: Redis (sessions), Filesystem (user data)
-- Security: bcrypt, sanitize-html, express-rate-limit, CSRF protection
-- File Upload: multer
-- Compression: compression middleware
+- Security: sanitize-html, express-rate-limit, CSRF protection, Cloudflare Turnstile
+- File Upload: multer (max 2MB)
+- Compression: compression middleware with optimized settings
+- HTTP Connection Pooling: keepAlive agents for AI requests
 
 **Frontend:**
 - Vanilla JavaScript (ES6+)
@@ -70,11 +72,15 @@ Reading Helper is a full-stack web application that combines text file managemen
 - Markmap (mind map rendering)
 - DOMPurify (client-side HTML sanitization)
 - Web Speech API (text-to-speech)
+- Responsive design with resizable panels
 
 **AI Integration:**
 - OpenAI Chat Completions API
 - OpenAI Responses API
-- Anthropic Messages API
+- Anthropic Messages API (with proper headers)
+- Auto-detection based on API URL pattern
+- 120-second request timeout
+- SSE streaming with buffer overflow protection
 
 ## 📁 Project Structure
 
@@ -83,6 +89,7 @@ reading-helper/
 ├── config/                          # Configuration files
 │   ├── platform.config.json         # Session secret
 │   ├── users.config.json            # User credentials & AI provider configs
+│   ├── cet_word_list.txt            # CET4/CET6 vocabulary list (cached in memory)
 │   └── prompts/                     # Default system prompt templates
 │       ├── explain-word.md
 │       ├── analyze-sentence.md
@@ -104,7 +111,7 @@ reading-helper/
 │           │       └── <uuid>.json
 │           └── prompts/             # User-edited prompts
 ├── server/                          # Backend modules
-│   ├── index.js                     # Main Express app & routes
+│   ├── index.js                     # Main Express app & routes (864 lines)
 │   ├── config-loader.js             # Config validation & loading
 │   ├── session-store.js             # Redis session store setup
 │   ├── file-store.js                # File upload/read/delete
@@ -114,7 +121,11 @@ reading-helper/
 │   ├── csrf-protection.js           # CSRF token validation
 │   └── cleanup-orphaned-users.js    # Startup cleanup utility
 ├── public/
-│   └── index.html                   # Single-page frontend (~5300 lines)
+│   ├── index.html                   # Main HTML structure (227 lines)
+│   ├── css/
+│   │   └── main.css                 # Styles (2252 lines)
+│   └── js/
+│       └── app.js                   # Frontend logic (3643 lines)
 ├── logs/                            # PM2 log output (created at runtime)
 ├── ecosystem.config.js              # PM2 cluster configuration
 ├── package.json
@@ -124,19 +135,21 @@ reading-helper/
 ## ✨ Core Features
 
 ### 🔐 Authentication & Security
-- Session-based authentication with 30-minute persistence
+- Session-based authentication with 30-minute timeout
 - Access key validation from `users.config.json`
 - **Cloudflare Turnstile human verification** on login page
 - Login rate limiting (5 attempts per 15 minutes)
 - CSRF protection via cookie + header validation
 - HTML sanitization (server: sanitize-html, client: DOMPurify)
 - Automatic cleanup of orphaned user directories on startup
+- Secure session cookies with httpOnly and sameSite protection
 
 ### 📄 File Management
-- Upload `.txt` and `.text` files (max 2MB)
+- Upload `.txt`, `.text`, and `.md` files (max 2MB)
 - Chinese filename support with proper encoding
 - List, read, and delete operations
 - Automatic chat history cleanup on file deletion
+- Path traversal protection with filename validation
 
 ### 💬 Conversation System
 - Multi-turn conversation persistence per article
@@ -146,11 +159,16 @@ reading-helper/
 - Base64url-encoded article names for directory safety
 
 ### 🤖 AI Integration
-- Automatic provider detection based on API URL pattern
-- Support for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages APIs
+- Automatic provider detection based on API URL pattern:
+  - URLs containing `anthropic` or ending with `/messages` → Anthropic Messages API
+  - URLs ending with `/responses` → OpenAI Responses API
+  - Otherwise → OpenAI Chat Completions API
 - SSE streaming for real-time token-by-token rendering
-- 120-second request timeout
+- 120-second request timeout with abort controller
 - Per-user API configuration (URL, key, model)
+- HTTP connection pooling with keepAlive for performance
+- Buffer overflow protection (10KB max SSE buffer)
+- Proper Anthropic API headers (`Authorization`, `x-api-key`, `anthropic-version`)
 
 ### 📝 Prompt Management
 - Default templates in `config/prompts/`
@@ -168,15 +186,17 @@ reading-helper/
 
 ### 🎨 Frontend Features
 - Resizable reading panel with drag handles
-- Adjustable font size
+- Adjustable font size (A+/A- controls)
 - Text selection triggers (word/sentence/paragraph)
 - Text-to-speech with adjustable speed/volume/pitch
 - Article context toggle (max 12,000 characters)
 - Structured output rendering:
   - Syntax tree visualization (collapsible)
-  - Interactive quiz components
+  - Interactive quiz components (MCQ, True/False, Q&A)
   - Mind map rendering via Markmap
-- CET4/CET6 vocabulary highlighting
+- CET4/CET6 vocabulary highlighting (cached in memory)
+- Responsive design with modern UI
+- Real-time SSE streaming display
 
 ## 🚀 PM2 Deployment
 
@@ -233,13 +253,13 @@ npm install
 **3. Cloudflare Turnstile Configuration:**
 
 The application uses Cloudflare Turnstile for human verification on the login page. The site key and secret key are configured in:
-- **Frontend** (`public/index.html`): Site key in `data-sitekey` attribute
-- **Backend** (`server/index.js`): Secret key in login route handler
+- **Frontend** (`public/index.html`): Site key in `data-sitekey` attribute (line 154)
+- **Backend** (`server/index.js`): Secret key in login route handler (line 464)
 
 To use your own Turnstile keys:
 1. Create a Turnstile site at [Cloudflare Dashboard](https://dash.cloudflare.com/?to=/:account/turnstile)
-2. Replace the site key in `public/index.html` (line 152)
-3. Replace the secret key in `server/index.js` (line 467)
+2. Replace the site key in `public/index.html`: `data-sitekey="YOUR_SITE_KEY"`
+3. Replace the secret key in `server/index.js`: `secret: 'YOUR_SECRET_KEY'`
 
 **4. Environment Variables:**
 
@@ -385,7 +405,7 @@ location / {
 **Symptom:** Upload rejected or file not appearing in list
 
 **Solution:**
-- Verify file extension is `.txt` or `.text`
+- Verify file extension is `.txt`, `.text`, or `.md`
 - Check file size is under 2MB (configurable via `MAX_UPLOAD_BYTES`)
 - Ensure `data/users/<userId>/uploads/` directory exists and is writable
 - Review filename for invalid characters (should be sanitized automatically)
@@ -415,7 +435,7 @@ location / {
 
 **Solution:**
 - Ensure `userId` in request matches session user
-- Check session hasn't expired (7-day limit)
+- Check session hasn't expired (30-minute timeout)
 - Verify user exists in `users.config.json`
 - Clear cookies and re-login if session is corrupted
 

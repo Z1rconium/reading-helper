@@ -6,15 +6,16 @@
 
 ## 📋 项目概述
 
-Reading Helper 是一个全栈 Web 应用程序，结合了文本文件管理、AI 驱动的语言学习功能和多用户身份验证。系统提供单页前端界面，配备强大的 Express 后端，处理用户认证、文件持久化、对话历史记录，并通过服务器发送事件（SSE）实现 AI 提供商抽象。
+Reading Helper 是一个全栈 Web 应用程序，结合了文本文件管理、AI 驱动的语言学习功能和多用户身份验证。系统提供现代化的单页应用前端界面，配备强大的 Express 后端，处理用户认证、文件持久化、对话历史记录，并通过服务器发送事件（SSE）实现 AI 提供商抽象。
 
 **核心特点：**
 - 基于会话的多用户隔离认证
-- 支持多种 AI 提供商（OpenAI、Anthropic）
+- 支持多种 AI 提供商（OpenAI Chat Completions、OpenAI Responses、Anthropic Messages）
 - 通过 SSE 实现实时流式 AI 响应
 - 按文章持久化对话历史
 - 每用户可自定义系统提示词
 - 支持中文文件名的文件上传
+- CET4/CET6 词汇高亮显示
 
 ## 🏗️ 技术架构
 
@@ -23,13 +24,13 @@ Reading Helper 是一个全栈 Web 应用程序，结合了文本文件管理、
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  前端（单页应用）                                        │
-│  • 静态 HTML/CSS/JS（约 5300 行）                       │
+│  • HTML（227 行）+ CSS（2252 行）+ JS（3643 行）        │
 │  • D3.js 和 Markmap 用于可视化                          │
 │  • EventSource 用于 SSE 流式传输                        │
 └─────────────────────────────────────────────────────────┘
                           ↓ HTTP/SSE
 ┌─────────────────────────────────────────────────────────┐
-│  Express 后端（Node.js）                                │
+│  Express 后端（Node.js，864 行）                        │
 │  ├─ 认证层                                              │
 │  │  • express-session + Redis                           │
 │  │  • Cloudflare Turnstile 人机验证                     │
@@ -41,13 +42,13 @@ Reading Helper 是一个全栈 Web 应用程序，结合了文本文件管理、
 │  │  • 用户专属提示词模板                                │
 │  └─ AI 提供商抽象                                       │
 │     • 自动检测（OpenAI/Anthropic）                      │
-│     • SSE 流式代理                                      │
+│     • SSE 流式代理与连接池                              │
 │     • 请求/响应格式适配                                 │
 └─────────────────────────────────────────────────────────┘
                           ↓
 ┌─────────────────────────────────────────────────────────┐
 │  存储与外部服务                                          │
-│  • Redis：会话持久化                                    │
+│  • Redis：会话持久化（30 分钟超时）                     │
 │  • 文件系统：用户数据（上传/对话/提示词）               │
 │  • 上游 AI API：OpenAI/Anthropic                        │
 └─────────────────────────────────────────────────────────┘
@@ -60,9 +61,10 @@ Reading Helper 是一个全栈 Web 应用程序，结合了文本文件管理、
 - 框架：Express 4.x
 - 会话：express-session + connect-redis
 - 存储：Redis（会话）、文件系统（用户数据）
-- 安全：bcrypt、sanitize-html、express-rate-limit、CSRF 防护
-- 文件上传：multer
-- 压缩：compression 中间件
+- 安全：sanitize-html、express-rate-limit、CSRF 防护、Cloudflare Turnstile
+- 文件上传：multer（最大 2MB）
+- 压缩：compression 中间件（优化配置）
+- HTTP 连接池：AI 请求使用 keepAlive 代理
 
 **前端：**
 - 原生 JavaScript（ES6+）
@@ -70,11 +72,15 @@ Reading Helper 是一个全栈 Web 应用程序，结合了文本文件管理、
 - Markmap（思维导图渲染）
 - DOMPurify（客户端 HTML 清洗）
 - Web Speech API（文本转语音）
+- 响应式设计，可调整大小的面板
 
 **AI 集成：**
 - OpenAI Chat Completions API
 - OpenAI Responses API
-- Anthropic Messages API
+- Anthropic Messages API（带正确的请求头）
+- 基于 API URL 模式自动检测
+- 120 秒请求超时
+- SSE 流式传输，带缓冲区溢出保护
 
 ## 📁 项目结构
 
@@ -83,6 +89,7 @@ reading-helper/
 ├── config/                          # 配置文件
 │   ├── platform.config.json         # 会话密钥
 │   ├── users.config.json            # 用户凭证和 AI 提供商配置
+│   ├── cet_word_list.txt            # CET4/CET6 词汇表（内存缓存）
 │   └── prompts/                     # 默认系统提示词模板
 │       ├── explain-word.md
 │       ├── analyze-sentence.md
@@ -104,7 +111,7 @@ reading-helper/
 │           │       └── <uuid>.json
 │           └── prompts/             # 用户编辑的提示词
 ├── server/                          # 后端模块
-│   ├── index.js                     # 主 Express 应用和路由
+│   ├── index.js                     # 主 Express 应用和路由（864 行）
 │   ├── config-loader.js             # 配置验证和加载
 │   ├── session-store.js             # Redis 会话存储设置
 │   ├── file-store.js                # 文件上传/读取/删除
@@ -114,7 +121,11 @@ reading-helper/
 │   ├── csrf-protection.js           # CSRF 令牌验证
 │   └── cleanup-orphaned-users.js    # 启动清理工具
 ├── public/
-│   └── index.html                   # 单页前端（约 5300 行）
+│   ├── index.html                   # 主 HTML 结构（227 行）
+│   ├── css/
+│   │   └── main.css                 # 样式（2252 行）
+│   └── js/
+│       └── app.js                   # 前端逻辑（3643 行）
 ├── logs/                            # PM2 日志输出（运行时创建）
 ├── ecosystem.config.js              # PM2 集群配置
 ├── package.json
@@ -124,19 +135,21 @@ reading-helper/
 ## ✨ 核心功能
 
 ### 🔐 认证与安全
-- 基于会话的认证，30 分钟持久化
+- 基于会话的认证，30 分钟超时
 - 从 `users.config.json` 验证访问密钥
 - **登录页面集成 Cloudflare Turnstile 人机验证**
 - 登录速率限制（15 分钟内最多 5 次尝试）
 - 通过 cookie + header 验证实现 CSRF 防护
 - HTML 清洗（服务端：sanitize-html，客户端：DOMPurify）
 - 启动时自动清理孤立的用户目录
+- 安全的会话 cookie，带 httpOnly 和 sameSite 保护
 
 ### 📄 文件管理
-- 上传 `.txt` 和 `.text` 文件（最大 2MB）
+- 上传 `.txt`、`.text` 和 `.md` 文件（最大 2MB）
 - 支持中文文件名，编码正确
 - 列表、读取和删除操作
 - 删除文件时自动清理关联的对话历史
+- 路径遍历保护，带文件名验证
 
 ### 💬 对话系统
 - 按文章持久化多轮对话
@@ -146,11 +159,16 @@ reading-helper/
 - 文章名称使用 Base64url 编码以确保目录安全
 
 ### 🤖 AI 集成
-- 基于 API URL 模式自动检测提供商
-- 支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages API
+- 基于 API URL 模式自动检测提供商：
+  - URL 包含 `anthropic` 或以 `/messages` 结尾 → Anthropic Messages API
+  - URL 以 `/responses` 结尾 → OpenAI Responses API
+  - 其他情况 → OpenAI Chat Completions API
 - SSE 流式传输实现逐 token 实时渲染
-- 120 秒请求超时
+- 120 秒请求超时，带中止控制器
 - 按用户配置 API（URL、密钥、模型）
+- HTTP 连接池，带 keepAlive 以提升性能
+- 缓冲区溢出保护（最大 10KB SSE 缓冲区）
+- 正确的 Anthropic API 请求头（`Authorization`、`x-api-key`、`anthropic-version`）
 
 ### 📝 提示词管理
 - 默认模板位于 `config/prompts/`
@@ -168,15 +186,17 @@ reading-helper/
 
 ### 🎨 前端功能
 - 可调整大小的阅读面板，带拖动手柄
-- 可调节字体大小
+- 可调节字体大小（A+/A- 控制）
 - 文本选择触发器（单词/句子/段落）
 - 文本转语音，可调节语速/音量/音调
 - 文章上下文开关（最多 12,000 字符）
 - 结构化输出渲染：
   - 语法树可视化（可折叠）
-  - 交互式测验组件
+  - 交互式测验组件（选择题、判断题、问答题）
   - 通过 Markmap 渲染思维导图
-- CET4/CET6 词汇高亮
+- CET4/CET6 词汇高亮（内存缓存）
+- 响应式设计，现代化 UI
+- 实时 SSE 流式显示
 
 ## 🚀 PM2 部署
 
@@ -233,13 +253,13 @@ npm install
 **3. Cloudflare Turnstile 配置：**
 
 应用程序在登录页面使用 Cloudflare Turnstile 进行人机验证。站点密钥和密钥配置在：
-- **前端**（`public/index.html`）：站点密钥在 `data-sitekey` 属性中
-- **后端**（`server/index.js`）：密钥在登录路由处理器中
+- **前端**（`public/index.html`）：站点密钥在 `data-sitekey` 属性中（第 154 行）
+- **后端**（`server/index.js`）：密钥在登录路由处理器中（第 464 行）
 
 使用您自己的 Turnstile 密钥：
 1. 在 [Cloudflare 控制台](https://dash.cloudflare.com/?to=/:account/turnstile) 创建 Turnstile 站点
-2. 替换 `public/index.html` 中的站点密钥（第 152 行）
-3. 替换 `server/index.js` 中的密钥（第 467 行）
+2. 替换 `public/index.html` 中的站点密钥：`data-sitekey="YOUR_SITE_KEY"`
+3. 替换 `server/index.js` 中的密钥：`secret: 'YOUR_SECRET_KEY'`
 
 **4. 环境变量：**
 
@@ -373,7 +393,7 @@ location / {
 **症状：** 上传被拒绝或文件未出现在列表中
 
 **解决方案：**
-- 验证文件扩展名为 `.txt` 或 `.text`
+- 验证文件扩展名为 `.txt`、`.text` 或 `.md`
 - 检查文件大小是否小于 2MB（可通过 `MAX_UPLOAD_BYTES` 配置）
 - 确保 `data/users/<userId>/uploads/` 目录存在且可写
 - 检查文件名中的无效字符（应自动清理）
@@ -403,7 +423,7 @@ location / {
 
 **解决方案：**
 - 确保请求中的 `userId` 与会话用户匹配
-- 检查会话是否未过期（7 天限制）
+- 检查会话是否未过期（30 分钟超时）
 - 验证用户存在于 `users.config.json` 中
 - 如果会话损坏，清除 cookie 并重新登录
 
