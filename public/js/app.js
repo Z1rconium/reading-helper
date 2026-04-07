@@ -213,6 +213,32 @@
             }
         }
 
+        function getMindmapZoomTransform(svgElement = null) {
+            const svg = svgElement || mindmapStage?.querySelector('svg');
+            if (!svg || !window.d3?.zoomTransform) {
+                return null;
+            }
+            return window.d3.zoomTransform(svg);
+        }
+
+        function applyMindmapZoomTransform(instance, svg, transform) {
+            if (
+                !instance ||
+                !svg ||
+                !transform ||
+                !instance.zoom ||
+                !window.d3?.select ||
+                !window.d3?.zoomIdentity
+            ) {
+                return;
+            }
+
+            const preservedTransform = window.d3.zoomIdentity
+                .translate(transform.x, transform.y)
+                .scale(transform.k);
+            window.d3.select(svg).call(instance.zoom.transform, preservedTransform);
+        }
+
         function stopHeartbeat() {
             if (heartbeatTimerId) {
                 window.clearTimeout(heartbeatTimerId);
@@ -1314,14 +1340,14 @@
         // Mindmap toolbar controls
         document.getElementById('mindmap-zoom-in')?.addEventListener('click', () => {
             if (currentMindmapInstance?.rescale) {
-                const currentScale = currentMindmapInstance.state?.scale || 1;
+                const currentScale = getMindmapZoomTransform()?.k || 1;
                 currentMindmapInstance.rescale(currentScale * 1.2);
             }
         });
 
         document.getElementById('mindmap-zoom-out')?.addEventListener('click', () => {
             if (currentMindmapInstance?.rescale) {
-                const currentScale = currentMindmapInstance.state?.scale || 1;
+                const currentScale = getMindmapZoomTransform()?.k || 1;
                 currentMindmapInstance.rescale(currentScale / 1.2);
             }
         });
@@ -1339,19 +1365,28 @@
         // Handle window resize for mindmap
         const handleMindmapResize = debounce(() => {
             if (mindmapModal.style.display === 'flex' && currentMindmapInstance) {
-                // Only adjust size and fit, don't re-render
+                // Resize SVG while preserving the current zoom/pan transform.
                 const containerWidth = mindmapStage.clientWidth;
                 const containerHeight = mindmapStage.clientHeight;
                 const svg = mindmapStage.querySelector('svg');
 
                 if (svg) {
+                    const previousTransform = getMindmapZoomTransform();
                     const width = Math.max(containerWidth - 24, 600);
                     const height = Math.max(containerHeight - 24, 400);
                     svg.setAttribute('width', String(width));
                     svg.setAttribute('height', String(height));
 
-                    if (typeof currentMindmapInstance.fit === 'function') {
-                        currentMindmapInstance.fit();
+                    if (
+                        previousTransform &&
+                        currentMindmapInstance.zoom &&
+                        window.d3?.select &&
+                        window.d3?.zoomIdentity
+                    ) {
+                        const preservedTransform = window.d3.zoomIdentity
+                            .translate(previousTransform.x, previousTransform.y)
+                            .scale(previousTransform.k);
+                        window.d3.select(svg).call(currentMindmapInstance.zoom.transform, preservedTransform);
                     }
                 }
             }
@@ -2558,7 +2593,41 @@
             };
         }
 
-        async function renderMindmap(markdown) {
+        function stabilizeMindmapToggleZoom(instance, svg) {
+            if (!instance || !svg || instance.__rhZoomStabilized) {
+                return instance;
+            }
+
+            const originalToggleNode = typeof instance.toggleNode === 'function'
+                ? instance.toggleNode.bind(instance)
+                : null;
+
+            if (!originalToggleNode) {
+                return instance;
+            }
+
+            instance.toggleNode = async (...args) => {
+                const beforeTransform = getMindmapZoomTransform(svg);
+                const result = await originalToggleNode(...args);
+
+                if (beforeTransform) {
+                    const transitionDuration = Number(instance.options?.duration) || 0;
+                    requestAnimationFrame(() => {
+                        applyMindmapZoomTransform(instance, svg, beforeTransform);
+                    });
+                    window.setTimeout(() => {
+                        applyMindmapZoomTransform(instance, svg, beforeTransform);
+                    }, transitionDuration + 24);
+                }
+
+                return result;
+            };
+
+            instance.__rhZoomStabilized = true;
+            return instance;
+        }
+
+        async function renderMindmap(markdown, precomputedRoot = null) {
             const content = getMindmapMarkdown(markdown);
             if (!content) {
                 throw new Error('思维导图内容为空');
@@ -2567,8 +2636,8 @@
             const markmap = await ensureMarkmapReady();
             const { Markmap } = markmap;
 
-            // Use singleton transformer instance
-            const { root } = markmapTransformer.transform(content);
+            // Use precomputed root from cache when available to avoid duplicate parsing work.
+            const root = precomputedRoot || markmapTransformer.transform(content).root;
 
             mindmapStage.innerHTML = '';
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -2585,13 +2654,12 @@
             svg.style.height = '100%';
             mindmapStage.appendChild(svg);
 
-            const mm = Markmap.create(svg, getMindmapRenderOptions(), root);
+            const mm = stabilizeMindmapToggleZoom(
+                Markmap.create(svg, getMindmapRenderOptions(), root),
+                svg
+            );
 
             scheduleMindmapVisualStyles();
-
-            if (typeof mm?.fit === 'function') {
-                mm.fit();
-            }
 
             // Store instance for toolbar controls
             currentMindmapInstance = mm;
@@ -2636,32 +2704,19 @@
             requestAnimationFrame(async () => {
                 try {
                     if (mindmapCache.has(cacheKey)) {
-                        // Use cached root data
+                        // Cache hit: reuse parsed tree, but always render into a fresh SVG.
                         const cachedData = mindmapCache.get(cacheKey);
-                        mindmapStage.innerHTML = cachedData.html;
+                        await renderMindmap(content, cachedData.root);
                         mindmapStatus.textContent = '';
-                        document.getElementById('mindmap-toolbar').style.display = 'flex';
-
-                        // Recreate Markmap instance for interactivity using cached root
-                        const markmap = await ensureMarkmapReady();
-                        const { Markmap } = markmap;
-                        const svg = mindmapStage.querySelector('svg');
-
-                        if (svg) {
-                            currentMindmapInstance = Markmap.create(svg, getMindmapRenderOptions(), cachedData.root);
-                            currentMindmapData = content;
-                            scheduleMindmapVisualStyles();
-                        }
                     } else {
                         // Render fresh
                         await ensureMarkmapReady();
                         const { root } = markmapTransformer.transform(content);
-                        await renderMindmap(content);
+                        await renderMindmap(content, root);
                         mindmapStatus.textContent = '';
 
-                        // Cache both HTML and parsed root data
+                        // Cache parsed root only. Caching rendered HTML can duplicate markmap layers.
                         mindmapCache.set(cacheKey, {
-                            html: mindmapStage.innerHTML,
                             root: root
                         });
 
@@ -3549,6 +3604,3 @@
                     break;
             }
         }
-
-
-
