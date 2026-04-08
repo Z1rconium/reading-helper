@@ -1,0 +1,56 @@
+// 全局状态管理
+export const state = {
+    currentSelection: '',
+    selectedRange: null,
+    pContent: '',
+    currentFileName: '',
+    currentFileContent: '',
+    currentConversationId: '',
+    creatingConversationPromise: null,
+    fontSize: 16,
+    currentUserId: '',
+    isVocabAnnotationEnabled: false,
+    cetWordLevelMap: null,
+    cetWordListPromise: null,
+    turnstileToken: '',
+    serverFiles: new Set(),
+    contextMenuFileName: '',
+    contextMenuConversationId: '',
+    promptFileList: [],
+    activePromptFileName: '',
+    summaryEvaluationArmed: false,
+    summaryOriginalParagraph: '',
+    promptTemplateCache: new Map(),
+    heartbeatTimerId: 0,
+    heartbeatInFlight: false,
+    mindmapCache: new Map(),
+    markmapTransformer: null,
+    currentMindmapInstance: null,
+    currentMindmapData: null,
+    isResizing: false,
+    resizeStartX: 0,
+    resizeStartWidth: 0,
+    resizeMinWidth: 0,
+    resizeMaxWidth: 0
+};
+
+export const constants = {
+    DEFAULT_TEXT_CONTENT_HTML: '<p>请上传一个文本文件。</p><p>您可以选择单词、句子或段落，然后在右侧与AI助手交互。</p>',
+    PROMPT_FILES: {
+        explainWord: 'explain-word.md',
+        analyzeSentence: 'analyze-sentence.md',
+        colorSentence: 'color-sentence.md',
+        summarizeParagraph: 'summarize-paragraph.md',
+        summaryEvaluation: 'summary-evaluation.md',
+        translateParagraph: 'translate-paragraph.md',
+        mindmap: 'mindmap.md',
+        qa: 'qa.md',
+        mcq: 'mcq.md',
+        tf: 'tf.md',
+        sendButton: 'send-button.md'
+    },
+    DEFAULT_CHAT_SYSTEM_PROMPT: '你是一位专业的英语老师。请回答学生关于英语学习的问题，要求：回答专业准确、重点清晰，并在需要时给出简短例子。',
+    MAX_ARTICLE_CONTEXT_CHARS: 12000,
+    HEARTBEAT_FOREGROUND_MS: 4 * 60 * 1000,
+    HEARTBEAT_BACKGROUND_MS: 10 * 60 * 1000
+};
