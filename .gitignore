@@ -9,3 +9,5 @@ CSRF_PROTECTION.md
 config/users.config.json
 PERFORMANCE_OPTIMIZATION.md
 config/users.config copy.json
+.vendor
+.claude
