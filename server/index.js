@@ -862,11 +862,35 @@ async function bootstrap() {
         });
       }
 
-      const audioBuffer = Buffer.from(await upstreamResponse.arrayBuffer());
+      // 流式转发：边接收边发送，零内存缓冲
       res.setHeader('Content-Type', upstreamResponse.headers.get('content-type') || 'audio/mpeg');
-      res.setHeader('Content-Length', String(audioBuffer.length));
+      const contentLength = upstreamResponse.headers.get('content-length');
+      if (contentLength) {
+        res.setHeader('Content-Length', contentLength);
+      }
       res.setHeader('Cache-Control', 'no-store');
-      return res.send(audioBuffer);
+
+      // 将 Web ReadableStream 转换为 Node.js Readable 并管道传输
+      const { Readable } = require('stream');
+      const nodeStream = Readable.fromWeb(upstreamResponse.body);
+
+      nodeStream.pipe(res);
+
+      // 处理流错误
+      nodeStream.on('error', (err) => {
+        if (!res.headersSent) {
+          res.status(502).json({ error: 'TTS 流传输失败' });
+        } else {
+          res.end();
+        }
+      });
+
+      // 客户端断开连接时中止上游请求
+      res.on('close', () => {
+        controller.abort();
+        nodeStream.destroy();
+      });
+
     } catch (error) {
       if (error.name === 'AbortError') {
         return res.status(504).json({ error: 'TTS 请求超时，请稍后重试' });
