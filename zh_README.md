@@ -24,16 +24,17 @@ Reading Helper 是一个全栈 Web 应用程序，结合了文本文件管理、
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  前端（单页应用）                                        │
-│  • HTML（227 行）+ CSS（2252 行）+ JS（3643 行）        │
+│  • HTML（227 行）+ CSS（~2300 行）+ JS（~7800 行）     │
+│  • 模块化架构（core/utils/modules）                     │
 │  • D3.js 和 Markmap 用于可视化                          │
 │  • EventSource 用于 SSE 流式传输                        │
 └─────────────────────────────────────────────────────────┘
                           ↓ HTTP/SSE
 ┌─────────────────────────────────────────────────────────┐
-│  Express 后端（Node.js，864 行）                        │
+│  Express 后端（Node.js，1013 行）                       │
 │  ├─ 认证层                                              │
 │  │  • express-session + Redis                           │
-│  │  • Cloudflare Turnstile 人机验证                     │
+│  │  • Cap.js CAPTCHA 人机验证                           │
 │  │  • CSRF 防护（cookie + header）                      │
 │  │  • 速率限制（15分钟/5次尝试）                        │
 │  ├─ 数据隔离层                                          │
@@ -61,17 +62,21 @@ Reading Helper 是一个全栈 Web 应用程序，结合了文本文件管理、
 - 框架：Express 4.x
 - 会话：express-session + connect-redis
 - 存储：Redis（会话）、文件系统（用户数据）
-- 安全：sanitize-html、express-rate-limit、CSRF 防护、Cloudflare Turnstile
+- 安全：sanitize-html、express-rate-limit、CSRF 防护、Cap.js CAPTCHA
 - 文件上传：multer（最大 2MB）
 - 压缩：compression 中间件（优化配置）
 - HTTP 连接池：AI 请求使用 keepAlive 代理
 
 **前端：**
-- 原生 JavaScript（ES6+）
+- 原生 JavaScript（ES6+）模块化架构
+  - Core：状态管理、DOM 工具
+  - Utils：API 客户端、辅助函数
+  - Modules：词汇高亮、语音合成、思维导图
 - D3.js（数据可视化）
 - Markmap（思维导图渲染）
 - DOMPurify（客户端 HTML 清洗）
-- Web Speech API（文本转语音）
+- Web Speech API + Edge TTS 流式传输
+- Cap.js CAPTCHA 组件（fork 版本）
 - 响应式设计，可调整大小的面板
 
 **AI 集成：**
@@ -79,8 +84,10 @@ Reading Helper 是一个全栈 Web 应用程序，结合了文本文件管理、
 - OpenAI Responses API
 - Anthropic Messages API（带正确的请求头）
 - 基于 API URL 模式自动检测
-- 120 秒请求超时
+- 120 秒请求超时（聊天），30 秒（TTS）
 - SSE 流式传输，带缓冲区溢出保护
+- HTTP 连接池，带 keepAlive
+- Edge TTS API 代理，零内存流式传输
 
 ## 📁 项目结构
 
@@ -123,10 +130,24 @@ reading-helper/
 ├── public/
 │   ├── index.html                   # 主 HTML 结构（227 行）
 │   ├── css/
-│   │   └── main.css                 # 样式（2252 行）
+│   │   └── main.css                 # 样式（~2300 行）
 │   └── js/
-│       └── app.js                   # 前端逻辑（3643 行）
+│       ├── main.js                  # 应用入口
+│       ├── core/
+│       │   ├── state.js             # 状态管理
+│       │   └── dom.js               # DOM 工具
+│       ├── utils/
+│       │   ├── api.js               # API 客户端
+│       │   └── helpers.js           # 辅助函数
+│       ├── modules/
+│       │   ├── vocab.js             # CET 词汇高亮
+│       │   ├── speech.js            # 文本转语音
+│       │   └── mindmap.js           # 思维导图可视化
+│       └── vendor/
+│           └── cap-widget/          # Cap.js CAPTCHA 组件
 ├── logs/                            # PM2 日志输出（运行时创建）
+├── .vendor/
+│   └── cap-widget-fork/             # Fork 的 Cap.js 组件源码
 ├── ecosystem.config.js              # PM2 集群配置
 ├── package.json
 └── README.md
@@ -137,7 +158,7 @@ reading-helper/
 ### 🔐 认证与安全
 - 基于会话的认证，30 分钟超时
 - 从 `users.config.json` 验证访问密钥
-- **登录页面集成 Cloudflare Turnstile 人机验证**
+- **登录页面集成 Cap.js CAPTCHA 人机验证**（支持独立和传统协议）
 - 登录速率限制（15 分钟内最多 5 次尝试）
 - 通过 cookie + header 验证实现 CSRF 防护
 - HTML 清洗（服务端：sanitize-html，客户端：DOMPurify）
@@ -145,7 +166,7 @@ reading-helper/
 - 安全的会话 cookie，带 httpOnly 和 sameSite 保护
 
 ### 📄 文件管理
-- 上传 `.txt`、`.text` 和 `.md` 文件（最大 2MB）
+- 上传 `.txt`、`.text` 和 `.md` 文件（最大 2MB，可配置）
 - 支持中文文件名，编码正确
 - 列表、读取和删除操作
 - 删除文件时自动清理关联的对话历史
@@ -188,7 +209,7 @@ reading-helper/
 - 可调整大小的阅读面板，带拖动手柄
 - 可调节字体大小（A+/A- 控制）
 - 文本选择触发器（单词/句子/段落）
-- 文本转语音，可调节语速/音量/音调
+- 文本转语音，可调节语速/音量/音调（Web Speech API + Edge TTS 流式传输）
 - 文章上下文开关（最多 12,000 字符）
 - 结构化输出渲染：
   - 语法树可视化（可折叠）
@@ -197,6 +218,7 @@ reading-helper/
 - CET4/CET6 词汇高亮（内存缓存）
 - 响应式设计，现代化 UI
 - 实时 SSE 流式显示
+- 性能监控（每 5 分钟记录内存使用，慢请求日志）
 
 ## 🚀 PM2 部署
 
@@ -205,6 +227,7 @@ reading-helper/
 - Node.js ≥18
 - Redis ≥6
 - PM2（全局安装：`npm install -g pm2`）
+- **生产环境：Debian 13**（请勿在 macOS 上测试）
 
 ### 安装
 
@@ -250,16 +273,23 @@ npm install
 - `accessKey`：所有用户中必须唯一
 - `api_url`：自动检测提供商类型（OpenAI/Anthropic）
 
-**3. Cloudflare Turnstile 配置：**
+**3. Cap.js CAPTCHA 配置：**
 
-应用程序在登录页面使用 Cloudflare Turnstile 进行人机验证。站点密钥和密钥配置在：
-- **前端**（`public/index.html`）：站点密钥在 `data-sitekey` 属性中（第 154 行）
-- **后端**（`server/index.js`）：密钥在登录路由处理器中（第 464 行）
+应用程序在登录页面使用 Cap.js CAPTCHA 进行人机验证。配置：
+- **前端**：从 `public/js/vendor/cap-widget/cap.min.js` 加载 Cap.js 组件
+- **后端**：通过环境变量配置 API 端点和密钥
 
-使用您自己的 Turnstile 密钥：
-1. 在 [Cloudflare 控制台](https://dash.cloudflare.com/?to=/:account/turnstile) 创建 Turnstile 站点
-2. 替换 `public/index.html` 中的站点密钥：`data-sitekey="YOUR_SITE_KEY"`
-3. 替换 `server/index.js` 中的密钥：`secret: 'YOUR_SECRET_KEY'`
+环境变量：
+```bash
+export CAP_API_ENDPOINT="https://your-cap-instance.com/"
+export CAP_SECRET="your-cap-secret"  # 可选，用于独立协议
+```
+
+**修改 Cap.js 组件：**
+项目使用 `.vendor/cap-widget-fork/` 中的 fork 版本。修改步骤：
+1. 编辑 `.vendor/cap-widget-fork/widget/src/src/` 中的源文件
+2. 重新构建：`cd .vendor/cap-widget-fork/widget && node build-node.mjs`
+3. 复制输出：`cp src/cap.min.js ../../../public/js/vendor/cap-widget/cap.min.js`
 
 **4. 环境变量：**
 
@@ -268,6 +298,10 @@ export REDIS_URL="redis://127.0.0.1:6379"
 export PORT=3000
 export CONFIG_DIR="./config"
 export USER_DATA_ROOT="./data/users"
+export CAP_API_ENDPOINT="https://your-cap-instance.com/"
+export CAP_SECRET="your-cap-secret"  # 可选
+export MAX_UPLOAD_BYTES=2097152  # 可选，默认 2MB
+export TRUST_PROXY=1  # 可选，用于反向代理
 ```
 
 ### PM2 启动
@@ -365,6 +399,18 @@ location / {
 - 检查反向代理是否保留了 `Set-Cookie` 和 `Cookie` 头
 - 对于跨域请求，正确配置 CORS 并使用 `credentials: 'include'`
 - 清除浏览器 cookie 并重试
+
+### Cap.js CAPTCHA 验证失败
+
+**症状：** 登录按钮保持禁用或 CAPTCHA 无法加载
+
+**解决方案：**
+- 验证 `CAP_API_ENDPOINT` 环境变量设置正确
+- 检查浏览器控制台中的 Cap.js 组件加载错误
+- 确保 Cap.js API 端点可访问（未被防火墙阻止）
+- 尝试刷新页面重新加载 CAPTCHA 组件
+- 对于独立协议，验证 `CAP_SECRET` 已配置
+- 检查服务器日志中的 CAPTCHA 验证错误
 
 ### SSE 流式传输问题
 

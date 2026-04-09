@@ -24,16 +24,17 @@ Reading Helper is a full-stack web application that combines text file managemen
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Frontend (Single-Page Application)                     │
-│  • HTML (227 lines) + CSS (2252 lines) + JS (3643 lines)│
+│  • HTML (227 lines) + CSS (~2300 lines) + JS (~7800 lines)│
+│  • Modular architecture (core/utils/modules)            │
 │  • D3.js & Markmap for visualizations                   │
 │  • EventSource for SSE streaming                        │
 └─────────────────────────────────────────────────────────┘
                           ↓ HTTP/SSE
 ┌─────────────────────────────────────────────────────────┐
-│  Express Backend (Node.js, 864 lines)                   │
+│  Express Backend (Node.js, 1013 lines)                  │
 │  ├─ Authentication Layer                                │
 │  │  • express-session + Redis                           │
-│  │  • Cloudflare Turnstile verification                 │
+│  │  • Cap.js CAPTCHA verification                       │
 │  │  • CSRF protection (cookie + header)                 │
 │  │  • Rate limiting (15min/5 attempts)                  │
 │  ├─ Data Isolation Layer                                │
@@ -61,17 +62,21 @@ Reading Helper is a full-stack web application that combines text file managemen
 - Framework: Express 4.x
 - Session: express-session + connect-redis
 - Storage: Redis (sessions), Filesystem (user data)
-- Security: sanitize-html, express-rate-limit, CSRF protection, Cloudflare Turnstile
+- Security: sanitize-html, express-rate-limit, CSRF protection, Cap.js CAPTCHA
 - File Upload: multer (max 2MB)
 - Compression: compression middleware with optimized settings
 - HTTP Connection Pooling: keepAlive agents for AI requests
 
 **Frontend:**
-- Vanilla JavaScript (ES6+)
+- Vanilla JavaScript (ES6+) with modular architecture
+  - Core: state management, DOM utilities
+  - Utils: API client, helpers
+  - Modules: vocab highlighting, speech synthesis, mindmap
 - D3.js (data visualization)
 - Markmap (mind map rendering)
 - DOMPurify (client-side HTML sanitization)
-- Web Speech API (text-to-speech)
+- Web Speech API + Edge TTS streaming
+- Cap.js CAPTCHA widget (forked)
 - Responsive design with resizable panels
 
 **AI Integration:**
@@ -79,8 +84,10 @@ Reading Helper is a full-stack web application that combines text file managemen
 - OpenAI Responses API
 - Anthropic Messages API (with proper headers)
 - Auto-detection based on API URL pattern
-- 120-second request timeout
+- 120-second request timeout for chat, 30s for TTS
 - SSE streaming with buffer overflow protection
+- HTTP connection pooling with keepAlive
+- Edge TTS API proxy with zero-memory streaming
 
 ## 📁 Project Structure
 
@@ -123,10 +130,24 @@ reading-helper/
 ├── public/
 │   ├── index.html                   # Main HTML structure (227 lines)
 │   ├── css/
-│   │   └── main.css                 # Styles (2252 lines)
+│   │   └── main.css                 # Styles (~2300 lines)
 │   └── js/
-│       └── app.js                   # Frontend logic (3643 lines)
+│       ├── main.js                  # Application entry point
+│       ├── core/
+│       │   ├── state.js             # State management
+│       │   └── dom.js               # DOM utilities
+│       ├── utils/
+│       │   ├── api.js               # API client
+│       │   └── helpers.js           # Helper functions
+│       ├── modules/
+│       │   ├── vocab.js             # CET vocabulary highlighting
+│       │   ├── speech.js            # Text-to-speech
+│       │   └── mindmap.js           # Mindmap visualization
+│       └── vendor/
+│           └── cap-widget/          # Cap.js CAPTCHA widget
 ├── logs/                            # PM2 log output (created at runtime)
+├── .vendor/
+│   └── cap-widget-fork/             # Forked Cap.js widget source
 ├── ecosystem.config.js              # PM2 cluster configuration
 ├── package.json
 └── README.md
@@ -137,7 +158,7 @@ reading-helper/
 ### 🔐 Authentication & Security
 - Session-based authentication with 30-minute timeout
 - Access key validation from `users.config.json`
-- **Cloudflare Turnstile human verification** on login page
+- **Cap.js CAPTCHA human verification** on login page (supports standalone and legacy protocols)
 - Login rate limiting (5 attempts per 15 minutes)
 - CSRF protection via cookie + header validation
 - HTML sanitization (server: sanitize-html, client: DOMPurify)
@@ -145,7 +166,7 @@ reading-helper/
 - Secure session cookies with httpOnly and sameSite protection
 
 ### 📄 File Management
-- Upload `.txt`, `.text`, and `.md` files (max 2MB)
+- Upload `.txt`, `.text`, and `.md` files (max 2MB, configurable)
 - Chinese filename support with proper encoding
 - List, read, and delete operations
 - Automatic chat history cleanup on file deletion
@@ -188,7 +209,7 @@ reading-helper/
 - Resizable reading panel with drag handles
 - Adjustable font size (A+/A- controls)
 - Text selection triggers (word/sentence/paragraph)
-- Text-to-speech with adjustable speed/volume/pitch
+- Text-to-speech with adjustable speed/volume/pitch (Web Speech API + Edge TTS streaming)
 - Article context toggle (max 12,000 characters)
 - Structured output rendering:
   - Syntax tree visualization (collapsible)
@@ -197,6 +218,7 @@ reading-helper/
 - CET4/CET6 vocabulary highlighting (cached in memory)
 - Responsive design with modern UI
 - Real-time SSE streaming display
+- Performance monitoring (memory usage logged every 5 minutes, slow request logging)
 
 ## 🚀 PM2 Deployment
 
@@ -205,6 +227,7 @@ reading-helper/
 - Node.js ≥18
 - Redis ≥6
 - PM2 (install globally: `npm install -g pm2`)
+- **Production environment: Debian 13** (do not test on macOS)
 
 ### Installation
 
@@ -250,16 +273,23 @@ npm install
 - `accessKey`: Must be unique across all users
 - `api_url`: Auto-detects provider type (OpenAI/Anthropic)
 
-**3. Cloudflare Turnstile Configuration:**
+**3. Cap.js CAPTCHA Configuration:**
 
-The application uses Cloudflare Turnstile for human verification on the login page. The site key and secret key are configured in:
-- **Frontend** (`public/index.html`): Site key in `data-sitekey` attribute (line 154)
-- **Backend** (`server/index.js`): Secret key in login route handler (line 464)
+The application uses Cap.js CAPTCHA for human verification on the login page. Configuration:
+- **Frontend**: Cap.js widget loaded from `public/js/vendor/cap-widget/cap.min.js`
+- **Backend**: API endpoint and secret configured via environment variables
 
-To use your own Turnstile keys:
-1. Create a Turnstile site at [Cloudflare Dashboard](https://dash.cloudflare.com/?to=/:account/turnstile)
-2. Replace the site key in `public/index.html`: `data-sitekey="YOUR_SITE_KEY"`
-3. Replace the secret key in `server/index.js`: `secret: 'YOUR_SECRET_KEY'`
+Environment variables:
+```bash
+export CAP_API_ENDPOINT="https://your-cap-instance.com/"
+export CAP_SECRET="your-cap-secret"  # Optional, for standalone protocol
+```
+
+**Modifying Cap.js Widget:**
+The project uses a forked Cap.js widget in `.vendor/cap-widget-fork/`. To modify:
+1. Edit source files in `.vendor/cap-widget-fork/widget/src/src/`
+2. Rebuild: `cd .vendor/cap-widget-fork/widget && node build-node.mjs`
+3. Copy output: `cp src/cap.min.js ../../../public/js/vendor/cap-widget/cap.min.js`
 
 **4. Environment Variables:**
 
@@ -268,6 +298,10 @@ export REDIS_URL="redis://127.0.0.1:6379"
 export PORT=3000
 export CONFIG_DIR="./config"
 export USER_DATA_ROOT="./data/users"
+export CAP_API_ENDPOINT="https://your-cap-instance.com/"
+export CAP_SECRET="your-cap-secret"  # Optional
+export MAX_UPLOAD_BYTES=2097152  # Optional, default 2MB
+export TRUST_PROXY=1  # Optional, for reverse proxy
 ```
 
 ### PM2 Startup
@@ -366,17 +400,17 @@ location / {
 - For cross-origin requests, configure CORS properly and use `credentials: 'include'`
 - Clear browser cookies and retry
 
-### Turnstile Verification Failures
+### Cap.js CAPTCHA Verification Failures
 
-**Symptom:** Login button remains disabled or shows "人机验证失败"
+**Symptom:** Login button remains disabled or CAPTCHA fails to load
 
 **Solution:**
-- Verify Cloudflare Turnstile site key is correct in `public/index.html`
-- Confirm secret key matches in `server/index.js`
-- Check browser console for Turnstile loading errors
-- Ensure `challenges.cloudflare.com` is accessible (not blocked by firewall/ad blocker)
-- Try refreshing the page to reload Turnstile widget
-- Verify Turnstile site domain matches your deployment domain in Cloudflare Dashboard
+- Verify `CAP_API_ENDPOINT` environment variable is set correctly
+- Check browser console for Cap.js widget loading errors
+- Ensure Cap.js API endpoint is accessible (not blocked by firewall)
+- Try refreshing the page to reload CAPTCHA widget
+- For standalone protocol, verify `CAP_SECRET` is configured
+- Check server logs for CAPTCHA verification errors
 
 ### SSE Streaming Issues
 
