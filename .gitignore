@@ -11,3 +11,4 @@ PERFORMANCE_OPTIMIZATION.md
 config/users.config copy.json
 .vendor
 .claude
+.vendor/cap-widget-fork
