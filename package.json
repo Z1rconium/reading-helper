@@ -12,6 +12,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@cap.js/widget": "^0.1.43",
     "bcrypt": "^6.0.0",
     "compression": "^1.8.1",
     "connect-redis": "^9.0.0",

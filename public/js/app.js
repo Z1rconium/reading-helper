@@ -144,7 +144,8 @@
         const loginBtn = document.getElementById('login-btn');
         const authError = document.getElementById('auth-error');
         const logoutBtn = document.getElementById('logout-btn');
-        let turnstileToken = '';
+        const capWidget = document.getElementById('cap-widget');
+        let capToken = '';
         const serverFiles = new Set();
         const defaultTextContentHtml = '<p>请上传一个文本文件。</p><p>您可以选择单词、句子或段落，然后在右侧与AI助手交互。</p>';
         let contextMenuFileName = '';
@@ -443,7 +444,8 @@
                 return;
             }
 
-            if (!turnstileToken) {
+            const latestCapToken = getLatestCapToken();
+            if (!latestCapToken) {
                 authError.textContent = '请完成人机验证';
                 authError.style.display = 'block';
                 return;
@@ -457,20 +459,20 @@
                         'Content-Type': 'application/json',
                         'X-CSRF-Token': getCsrfToken()
                     },
-                    body: JSON.stringify({ accessKey, turnstileToken })
+                    body: JSON.stringify({ accessKey, capToken: latestCapToken })
                 });
 
                 if (response.status === 401) {
                     authError.textContent = '访问 Key 无效，请重试。';
                     authError.style.display = 'block';
-                    resetTurnstile();
+                    resetCaptcha();
                     return;
                 }
                 if (!response.ok) {
                     const data = await response.json();
                     authError.textContent = data.error || `登录失败: ${response.status}`;
                     authError.style.display = 'block';
-                    resetTurnstile();
+                    resetCaptcha();
                     return;
                 }
 
@@ -1258,24 +1260,44 @@
         });
         logoutBtn.addEventListener('click', logout);
 
-        // Turnstile callbacks
-        window.onTurnstileSuccess = function(token) {
-            turnstileToken = token;
-            loginBtn.disabled = false;
-        };
+        // Cap.js callbacks - wait for widget to be ready
+        function setupCapWidget() {
+            if (capWidget) {
+                capWidget.addEventListener('solve', (e) => {
+                    capToken = (typeof e?.detail?.token === 'string' && e.detail.token.trim())
+                        ? e.detail.token.trim()
+                        : getLatestCapToken();
+                    loginBtn.disabled = false;
+                    authError.style.display = 'none';
+                });
+                capWidget.addEventListener('error', (e) => {
+                    capToken = '';
+                    loginBtn.disabled = true;
+                    authError.textContent = '人机验证失败：' + (e.detail.message || '请刷新页面重试');
+                    authError.style.display = 'block';
+                });
+                capWidget.addEventListener('reset', () => {
+                    capToken = '';
+                    loginBtn.disabled = true;
+                });
+            }
+        }
+        setTimeout(setupCapWidget, 100);
 
-        window.onTurnstileError = function() {
-            turnstileToken = '';
-            loginBtn.disabled = true;
-            authError.textContent = '人机验证失败，请刷新页面重试';
-            authError.style.display = 'block';
-        };
+        function getLatestCapToken() {
+            const widgetToken = typeof capWidget?.token === 'string' ? capWidget.token.trim() : '';
+            if (widgetToken) {
+                capToken = widgetToken;
+                return widgetToken;
+            }
+            return typeof capToken === 'string' ? capToken.trim() : '';
+        }
 
-        function resetTurnstile() {
-            turnstileToken = '';
+        function resetCaptcha() {
+            capToken = '';
             loginBtn.disabled = true;
-            if (window.turnstile) {
-                window.turnstile.reset();
+            if (capWidget && capWidget.reset) {
+                capWidget.reset();
             }
         }
         fileList.addEventListener('contextmenu', (event) => {
