@@ -207,7 +207,6 @@
         function toggleFullscreen(element) {
             if (!document.fullscreenElement) {
                 element.requestFullscreen().catch(err => {
-                    console.error('Fullscreen request failed:', err);
                 });
             } else {
                 document.exitFullscreen();
@@ -277,16 +276,13 @@
                 });
 
                 if (!response.ok) {
-                    console.warn(`[heartbeat] 请求失败 (${reason}): ${response.status}`);
                     return;
                 }
 
                 const data = await response.json();
                 if (!data?.authenticated) {
-                    console.warn('[heartbeat] 当前会话未认证');
                 }
             } catch (error) {
-                console.warn(`[heartbeat] 请求异常 (${reason}):`, error);
             } finally {
                 heartbeatInFlight = false;
                 if (currentUserId) {
@@ -429,7 +425,6 @@
                 }
                 return authenticated;
             } catch (error) {
-                console.error('检查登录状态失败:', error);
                 resetPromptState();
                 serverFiles.clear();
                 updateFileList();
@@ -492,7 +487,6 @@
                 await fetchServerFileList();
                 updateFileList();
             } catch (error) {
-                console.error('登录失败:', error);
                 authError.style.display = 'block';
             }
         }
@@ -508,7 +502,6 @@
                     }
                 });
             } catch (error) {
-                console.error('退出失败:', error);
             }
 
             serverFiles.clear();
@@ -550,7 +543,6 @@
                     if (name) serverFiles.add(name);
                 });
             } catch (error) {
-                console.error('读取服务器文件列表失败:', error);
             }
         }
 
@@ -1709,7 +1701,46 @@
 
         // 朗读功能
         let speechSynthesisUtterance = null;
+        let currentAudio = null;
+        let audioQueue = [];
+        let isPlayingQueue = false;
         const readAloudBtn = document.getElementById('read-aloud-btn');
+        const voiceSelect = document.getElementById('voice-select');
+        const ttsEndpoint = '/api/tts';
+        const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+        function getSelectedVoiceName() {
+            return voiceSelect?.value || 'en-GB-SoniaNeural';
+        }
+
+        function getSafariVoiceForSelection(availableVoices, edgeVoiceName) {
+            const selectionMap = {
+                'en-GB-SoniaNeural': ['Daniel', 'Samantha'],
+                'en-GB-RyanNeural': ['Daniel', 'Alex'],
+                'en-US-AriaNeural': ['Samantha', 'Ava'],
+                'en-US-GuyNeural': ['Alex', 'Aaron']
+            };
+            const preferredNames = selectionMap[edgeVoiceName] || [];
+
+            for (const preferredName of preferredNames) {
+                const matchedVoice = availableVoices.find((voice) => voice.name.includes(preferredName));
+                if (matchedVoice) {
+                    return matchedVoice;
+                }
+            }
+
+            if (edgeVoiceName.startsWith('en-GB')) {
+                return availableVoices.find((voice) => voice.lang === 'en-GB')
+                    || availableVoices.find((voice) => voice.lang.startsWith('en-GB'));
+            }
+
+            if (edgeVoiceName.startsWith('en-US')) {
+                return availableVoices.find((voice) => voice.lang === 'en-US')
+                    || availableVoices.find((voice) => voice.lang.startsWith('en-US'));
+            }
+
+            return availableVoices.find((voice) => voice.lang.startsWith('en'));
+        }
 
         // 初始化语音列表（Safari 需要）
         let voicesLoaded = false;
@@ -1721,26 +1752,28 @@
             }
         }
 
-        if ('speechSynthesis' in window) {
-            // Chrome/Edge 立即加载，Safari 需要事件触发
+        if (isSafari && 'speechSynthesis' in window) {
             loadVoices();
             window.speechSynthesis.onvoiceschanged = loadVoices;
-        } else {
-            // 浏览器不支持
+        } else if (isSafari) {
             readAloudBtn.disabled = true;
             readAloudBtn.title = '您的浏览器不支持语音朗读功能';
         }
 
         readAloudBtn.addEventListener('click', async function () {
-            // 检查是否支持 Web Speech API
-            if (!('speechSynthesis' in window)) {
-                addSystemMessage('您的浏览器不支持语音朗读功能，请使用 Chrome、Edge 或 Safari 浏览器');
-                return;
-            }
+            const isSpeakingNatively = 'speechSynthesis' in window && window.speechSynthesis.speaking;
 
             // 如果正在朗读，则停止
-            if (window.speechSynthesis.speaking) {
-                window.speechSynthesis.cancel();
+            if ((currentAudio && !currentAudio.paused) || isSpeakingNatively || isPlayingQueue) {
+                if (currentAudio) {
+                    currentAudio.pause();
+                    currentAudio.currentTime = 0;
+                }
+                if ('speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                }
+                isPlayingQueue = false;
+                audioQueue = [];
                 readAloudBtn.textContent = '朗读';
                 readAloudBtn.classList.remove('speaking');
                 return;
@@ -1752,95 +1785,151 @@
                 return;
             }
 
-            // 确保语音列表已加载
-            let availableVoices = window.speechSynthesis.getVoices();
-            if (availableVoices.length === 0) {
-                // Safari 可能需要异步加载
-                await new Promise(resolve => {
-                    let attempts = 0;
-                    const checkVoices = setInterval(() => {
-                        availableVoices = window.speechSynthesis.getVoices();
-                        attempts++;
-                        if (availableVoices.length > 0 || attempts > 10) {
-                            clearInterval(checkVoices);
-                            resolve();
-                        }
-                    }, 100);
-                });
-            }
-
-            // 创建语音合成实例
-            speechSynthesisUtterance = new SpeechSynthesisUtterance(currentSelection);
-
-            // 从输入框获取参数值
             const rateInput = document.getElementById('speech-rate');
             const volumeInput = document.getElementById('speech-volume');
             const pitchInput = document.getElementById('speech-pitch');
+            const selectedVoice = getSelectedVoiceName();
 
-            // 配置语音参数
-            speechSynthesisUtterance.lang = 'en-US';
-            speechSynthesisUtterance.rate = parseFloat(rateInput.value) || 0.9;
-            speechSynthesisUtterance.volume = parseFloat(volumeInput.value) || 1.0;
-            speechSynthesisUtterance.pitch = parseFloat(pitchInput.value) || 1.0;
+            if (!isSafari) {
+                // 非 Safari 浏览器统一使用 edge-tts 服务
+                try {
+                    const rate = parseFloat(rateInput.value) || 0.9;
+                    const volume = parseFloat(volumeInput.value) || 1.0;
+                    const pitch = parseFloat(pitchInput.value) || 1.0;
 
-            // 选择最佳英文语音
-            // 优先选择在线语音（质量更好），无法访问时降级到本地语音
-            let selectedVoice = null;
 
-            // 策略1: 优先选择在线英文语音（Google TTS 等高质量语音）
-            selectedVoice = availableVoices.find(voice =>
-                voice.lang.startsWith('en') && !voice.localService
-            );
+                    readAloudBtn.textContent = '停止';
+                    readAloudBtn.classList.add('speaking');
+                    isPlayingQueue = true;
 
-            // 策略2: 如果没有在线语音或无法访问，降级到本地英文语音
-            if (!selectedVoice) {
-                selectedVoice = availableVoices.find(voice =>
-                    voice.lang.startsWith('en') && voice.localService
-                );
-            }
+                    // 分句处理：按句号、问号、感叹号分割
+                    const sentences = currentSelection.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [currentSelection];
+                    let currentIndex = 0;
 
-            // 策略3: 兜底 - 选择任何可用的英文语音
-            if (!selectedVoice) {
-                selectedVoice = availableVoices.find(voice => voice.lang.startsWith('en'));
-            }
+                    const playNext = async () => {
+                        if (!isPlayingQueue || currentIndex >= audioQueue.length) {
+                            isPlayingQueue = false;
+                            audioQueue = [];
+                            readAloudBtn.textContent = '朗读';
+                            readAloudBtn.classList.remove('speaking');
+                            return;
+                        }
 
-            // 策略4: Safari 特定优化 - 选择 Samantha 或其他高质量语音
-            if (!selectedVoice && /^((?!chrome|android).)*safari/i.test(navigator.userAgent)) {
-                selectedVoice = availableVoices.find(voice =>
-                    voice.name.includes('Samantha') || voice.name.includes('Alex')
-                );
-            }
+                        const audioUrl = await audioQueue[currentIndex];
+                        currentIndex++;
 
-            if (selectedVoice) {
-                speechSynthesisUtterance.voice = selectedVoice;
-            }
+                        if (!isPlayingQueue) return;
 
-            // 事件监听
-            speechSynthesisUtterance.onstart = () => {
-                readAloudBtn.textContent = '停止';
-                readAloudBtn.classList.add('speaking');
-            };
+                        currentAudio = new Audio(audioUrl);
+                        currentAudio.onended = () => {
+                            URL.revokeObjectURL(audioUrl);
+                            playNext();
+                        };
+                        currentAudio.onerror = () => {
+                            URL.revokeObjectURL(audioUrl);
+                            playNext();
+                        };
+                        await currentAudio.play();
+                    };
 
-            speechSynthesisUtterance.onend = () => {
-                readAloudBtn.textContent = '朗读';
-                readAloudBtn.classList.remove('speaking');
-            };
+                    // 并行请求所有句子的 TTS
+                    audioQueue = sentences.map(async (sentence) => {
+                        const requestBody = {
+                            text: sentence.trim(),
+                            voice: selectedVoice,
+                            rate: `${rate >= 1 ? '+' : ''}${Math.round((rate - 1) * 100)}%`,
+                            volume: `${volume >= 1 ? '+' : ''}${Math.round((volume - 1) * 100)}%`,
+                            pitch: `${pitch >= 1 ? '+' : ''}${Math.round((pitch - 1) * 50)}Hz`
+                        };
 
-            speechSynthesisUtterance.onerror = (event) => {
-                readAloudBtn.textContent = '朗读';
-                readAloudBtn.classList.remove('speaking');
-                if (event.error !== 'interrupted') {
-                    addSystemMessage(`朗读失败: ${event.error}`);
+                        const response = await fetch(ttsEndpoint, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-CSRF-Token': getCsrfToken()
+                            },
+                            body: JSON.stringify(requestBody)
+                        });
+
+                        if (!response.ok) {
+                            throw new Error('TTS服务请求失败');
+                        }
+
+                        const audioBlob = await response.blob();
+                        return URL.createObjectURL(audioBlob);
+                    });
+
+                    await playNext();
+
+                } catch (error) {
+                    isPlayingQueue = false;
+                    audioQueue = [];
+                    readAloudBtn.textContent = '朗读';
+                    readAloudBtn.classList.remove('speaking');
+                    addSystemMessage(`朗读失败: ${error.message}`);
                 }
-            };
+            } else {
+                // 非Chrome: 使用原生 speechSynthesis
+                if (!('speechSynthesis' in window)) {
+                    addSystemMessage('您的浏览器不支持语音朗读功能');
+                    return;
+                }
 
-            // 开始朗读
-            try {
-                window.speechSynthesis.speak(speechSynthesisUtterance);
-            } catch (error) {
-                addSystemMessage(`朗读失败: ${error.message}`);
-                readAloudBtn.textContent = '朗读';
-                readAloudBtn.classList.remove('speaking');
+                let availableVoices = window.speechSynthesis.getVoices();
+                if (availableVoices.length === 0) {
+                    await new Promise(resolve => {
+                        let attempts = 0;
+                        const checkVoices = setInterval(() => {
+                            availableVoices = window.speechSynthesis.getVoices();
+                            attempts++;
+                            if (availableVoices.length > 0 || attempts > 10) {
+                                clearInterval(checkVoices);
+                                resolve();
+                            }
+                        }, 100);
+                    });
+                }
+
+                speechSynthesisUtterance = new SpeechSynthesisUtterance(currentSelection);
+                speechSynthesisUtterance.lang = 'en-US';
+                speechSynthesisUtterance.rate = parseFloat(rateInput.value) || 0.9;
+                speechSynthesisUtterance.volume = parseFloat(volumeInput.value) || 1.0;
+                speechSynthesisUtterance.pitch = parseFloat(pitchInput.value) || 1.0;
+
+                let selectedSafariVoice = getSafariVoiceForSelection(availableVoices, selectedVoice)
+                    || availableVoices.find(voice => voice.lang.startsWith('en') && !voice.localService)
+                    || availableVoices.find(voice => voice.lang.startsWith('en') && voice.localService)
+                    || availableVoices.find(voice => voice.lang.startsWith('en'));
+
+                if (selectedSafariVoice) {
+                    speechSynthesisUtterance.voice = selectedSafariVoice;
+                }
+
+                speechSynthesisUtterance.onstart = () => {
+                    readAloudBtn.textContent = '停止';
+                    readAloudBtn.classList.add('speaking');
+                };
+
+                speechSynthesisUtterance.onend = () => {
+                    readAloudBtn.textContent = '朗读';
+                    readAloudBtn.classList.remove('speaking');
+                };
+
+                speechSynthesisUtterance.onerror = (event) => {
+                    readAloudBtn.textContent = '朗读';
+                    readAloudBtn.classList.remove('speaking');
+                    if (event.error !== 'interrupted') {
+                        addSystemMessage(`朗读失败: ${event.error}`);
+                    }
+                };
+
+                try {
+                    window.speechSynthesis.speak(speechSynthesisUtterance);
+                } catch (error) {
+                    addSystemMessage(`朗读失败: ${error.message}`);
+                    readAloudBtn.textContent = '朗读';
+                    readAloudBtn.classList.remove('speaking');
+                }
             }
         });
 
@@ -1867,7 +1956,6 @@
                     guideMessage = rendered;
                 }
             } catch (error) {
-                console.error('读取概括提示词失败:', error);
             }
             simulateAIResponse(guideMessage);
         });
@@ -2054,7 +2142,6 @@
                         }
                     );
                     if (isSummaryEvaluationPrompt(systemPrompt)) {
-                        console.warn('send-button.md 当前像“概括评价”模板，已回退到普通问答系统提示词。');
                         systemPrompt = DEFAULT_CHAT_SYSTEM_PROMPT;
                     }
                     const loadingMessage = simulateAIResponse('正在思考你的问题...');
@@ -2101,7 +2188,6 @@
 
             // 保存互动内容
             saveInteraction('user', message).catch((error) => {
-                console.error('保存用户消息失败:', error);
                 addSystemMessage(`保存对话失败: ${error.message}`);
             });
         }
@@ -2140,7 +2226,6 @@
             // 保存互动内容
             if (message.includes('#')) {
                 saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(message, null))).catch((error) => {
-                    console.error('保存助手消息失败:', error);
                     addSystemMessage(`保存对话失败: ${error.message}`);
                 });
             }
@@ -2230,7 +2315,6 @@
                             try {
                                 data = JSON.parse(payload);
                             } catch (e) {
-                                console.error('解析流式数据出错:', e);
                                 continue;
                             }
 
@@ -2254,7 +2338,6 @@
                         try {
                             data = JSON.parse(payload);
                         } catch (e) {
-                            console.error('解析剩余buffer出错:', e);
                             continue;
                         }
 
@@ -2279,11 +2362,9 @@
 
                 chatMessages.scrollTop = chatMessages.scrollHeight;
                 saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(accumulatedText, operation, true))).catch((error) => {
-                    console.error('保存助手消息失败:', error);
                     addSystemMessage(`保存对话失败: ${error.message}`);
                 });
             } catch (error) {
-                console.error('调用AI API出错:', error);
                 renderAIResponse(responseElement, `抱歉，处理请求时出错: ${error.message}`, null);
             }
         }
@@ -2352,7 +2433,6 @@
             try {
                 return decodeURIComponent(String(text || ''));
             } catch (error) {
-                console.error('解码结构化内容失败:', error);
                 return String(text || '');
             }
         }
@@ -2795,7 +2875,6 @@
                         }
                     }
                 } catch (error) {
-                    console.error('渲染思维导图失败:', error);
                     mindmapStatus.textContent = `思维导图渲染失败: ${error.message}`;
                 }
             });
@@ -2881,14 +2960,12 @@
             // Prefer JSON objects that contain "questions" field (for quiz/question operations)
             for (const item of candidates) {
                 if (item.data && item.data.questions && Array.isArray(item.data.questions)) {
-                    console.log('[JSON Extract] Found questions JSON, length:', item.json.length);
                     return item.json;
                 }
             }
 
             // Fall back to first valid JSON found
             if (candidates.length > 0) {
-                console.log('[JSON Extract] Balanced JSON found, length:', candidates[0].json.length);
                 return candidates[0].json;
             }
 
@@ -2898,13 +2975,11 @@
         function extractJsonPayload(markdown) {
             const fenced = extractFencedBlock(markdown, 'json');
             if (fenced) {
-                console.log('[JSON Extract] Fenced block found, length:', fenced.length);
                 return fenced;
             }
 
             const trimmed = String(markdown || '').trim();
             if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-                console.log('[JSON Extract] Direct JSON found, length:', trimmed.length);
                 return trimmed;
             }
 
@@ -2912,7 +2987,6 @@
             if (balanced) {
                 return balanced;
             }
-            console.log('[JSON Extract] No JSON found in markdown');
             return '';
         }
 
@@ -2923,8 +2997,6 @@
                 const data = JSON.parse(payload);
                 return { payload, data };
             } catch (error) {
-                console.log('[JSON Parse] failed:', error.message);
-                console.log('[JSON Parse] Data preview:', payload.substring(0, 200));
                 return null;
             }
         }
@@ -3473,7 +3545,6 @@
                     }
                     return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
                 }
-                console.log('[MCQ] JSON parsed successfully');
                 const quizHtml = buildQuizHtml(parsed.data, currentFileName, 'mcq', isFinal);
                 return quizHtml;
             } else if (operation === 'tf') {
@@ -3484,7 +3555,6 @@
                     }
                     return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
                 }
-                console.log('[TF] JSON parsed successfully');
                 const quizHtml = buildQuizHtml(parsed.data, currentFileName, 'tf', isFinal);
                 return quizHtml;
             } else if (operation === 'questions') {
@@ -3495,7 +3565,6 @@
                     }
                     return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
                 }
-                console.log('[Questions] JSON parsed successfully');
                 const questionHtml = buildQuestionListHtml(parsed.data, currentFileName, isFinal);
                 return questionHtml;
             } else if (operation === 'structure') {
@@ -3503,15 +3572,12 @@
                 if (data) {
                     try {
                         const data1 = JSON.parse(data);
-                        console.log('[Structure] JSON parsed successfully');
                         const div = document.createElement('div');
                         div.id = 'syntaxTree';
                         div.className = "tree";
                         createTree(data1.syntax_tree, div);
                         return div.outerHTML;
                     } catch (error) {
-                        console.log('[Structure] JSON parse failed:', error.message);
-                        console.log('[Structure] Data preview:', data.substring(0, 200));
                         return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
                     }
                 }

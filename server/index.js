@@ -45,7 +45,9 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 5;
 const TRUST_PROXY_ENV = process.env.TRUST_PROXY;
 const AI_REQUEST_TIMEOUT_MS = 120000; // 120 秒超时
+const TTS_REQUEST_TIMEOUT_MS = 30000;
 const MAX_SSE_BUFFER_SIZE = 10 * 1024; // 10KB
+const EDGE_TTS_ENDPOINT = 'https://edge-tts.shaynewong.dpdns.org/tts';
 
 // #11 AI 请求连接复用 - 创建全局 agent
 const httpsAgent = new https.Agent({
@@ -419,7 +421,8 @@ async function bootstrap() {
       "style-src 'self' 'unsafe-inline'; " +
       "img-src 'self' data: https:; " +
       "font-src 'self' data:; " +
-      "connect-src 'self' https://challenges.cloudflare.com; " +
+      "media-src 'self' blob:; " +
+      "connect-src 'self' https://challenges.cloudflare.com https://edge-tts.shaynewong.dpdns.org https://cdn.jsdelivr.net; " +
       "frame-src https://challenges.cloudflare.com; " +
       "worker-src 'self' blob:;"
     );
@@ -817,6 +820,58 @@ async function bootstrap() {
       }
       res.write('data: [DONE]\n\n');
       return res.end();
+    } finally {
+      clearTimeout(timeout);
+    }
+  });
+
+  app.post('/api/tts', requireAuth, csrfProtection, async (req, res) => {
+    const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+    const voice = typeof req.body?.voice === 'string' ? req.body.voice.trim() : '';
+    const rate = typeof req.body?.rate === 'string' ? req.body.rate.trim() : '';
+    const volume = typeof req.body?.volume === 'string' ? req.body.volume.trim() : '';
+    const pitch = typeof req.body?.pitch === 'string' ? req.body.pitch.trim() : '';
+
+    if (!text) {
+      return res.status(400).json({ error: 'text 不能为空' });
+    }
+
+    if (!voice) {
+      return res.status(400).json({ error: 'voice 不能为空' });
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TTS_REQUEST_TIMEOUT_MS);
+
+    try {
+      const upstreamResponse = await fetch(EDGE_TTS_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'audio/mpeg, audio/*, application/octet-stream'
+        },
+        body: JSON.stringify({ text, voice, rate, volume, pitch }),
+        signal: controller.signal,
+        agent: EDGE_TTS_ENDPOINT.startsWith('https') ? httpsAgent : httpAgent
+      });
+
+      if (!upstreamResponse.ok) {
+        const errorText = await upstreamResponse.text();
+        return res.status(upstreamResponse.status).json({
+          error: errorText || `TTS 上游请求失败: ${upstreamResponse.status}`
+        });
+      }
+
+      const audioBuffer = Buffer.from(await upstreamResponse.arrayBuffer());
+      res.setHeader('Content-Type', upstreamResponse.headers.get('content-type') || 'audio/mpeg');
+      res.setHeader('Content-Length', String(audioBuffer.length));
+      res.setHeader('Cache-Control', 'no-store');
+      return res.send(audioBuffer);
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        return res.status(504).json({ error: 'TTS 请求超时，请稍后重试' });
+      }
+      return res.status(502).json({ error: error.message || 'TTS 请求失败' });
     } finally {
       clearTimeout(timeout);
     }
