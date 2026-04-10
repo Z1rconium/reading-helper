@@ -3001,26 +3001,46 @@
             }
 
             const trimmed = String(markdown || '').trim();
-            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-                return trimmed;
-            }
-
             const balanced = extractBalancedJsonPayload(trimmed);
             if (balanced) {
                 return balanced;
             }
+
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                return trimmed;
+            }
             return '';
+        }
+
+        function parseJsonWithRecovery(payload) {
+            const input = String(payload || '').trim();
+            if (!input) return null;
+
+            const attempts = [input];
+            const noTrailingCommas = input.replace(/,\s*([}\]])/g, '$1');
+            if (noTrailingCommas !== input) {
+                attempts.push(noTrailingCommas);
+            }
+
+            for (const candidate of attempts) {
+                try {
+                    return JSON.parse(candidate);
+                } catch (error) {
+                    // Keep trying fallbacks.
+                }
+            }
+
+            return null;
         }
 
         function parseJsonContent(markdown) {
             const payload = extractJsonPayload(markdown);
             if (!payload) return null;
-            try {
-                const data = JSON.parse(payload);
-                return { payload, data };
-            } catch (error) {
+            const data = parseJsonWithRecovery(payload);
+            if (!data) {
                 return null;
             }
+            return { payload, data };
         }
 
         function formatJsonForDisplay(payload) {
@@ -3590,20 +3610,18 @@
                 const questionHtml = buildQuestionListHtml(parsed.data, currentFileName, isFinal);
                 return questionHtml;
             } else if (operation === 'structure') {
-                const data = extractJsonPayload(markdown);
-                if (data) {
-                    try {
-                        const data1 = JSON.parse(data);
-                        const div = document.createElement('div');
-                        div.id = 'syntaxTree';
-                        div.className = "tree";
-                        createTree(data1.syntax_tree, div);
-                        return div.outerHTML;
-                    } catch (error) {
-                        return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
-                    }
+                const parsed = parseJsonContent(markdown);
+                if (parsed && parsed.data && parsed.data.syntax_tree) {
+                    const div = document.createElement('div');
+                    div.id = 'syntaxTree';
+                    div.className = "tree";
+                    createTree(parsed.data.syntax_tree, div);
+                    return div.outerHTML;
                 }
-                return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
+                if (!isFinal) {
+                    return renderQuestionLoadingHtml();
+                }
+                return renderStructuredFallback(markdown, 'JSON 输出格式错误，无法渲染语法树。');
             } else {
                 return markdownToHtml1(markdown);
             }
