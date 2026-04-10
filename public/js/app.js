@@ -3035,9 +3035,37 @@
 
         function parseJsonContent(markdown) {
             const payload = extractJsonPayload(markdown);
-            if (!payload) return null;
+            if (!payload) {
+                const recoveredQuestions = extractLooseQuestionItems(markdown);
+                if (recoveredQuestions.length) {
+                    return {
+                        payload: '',
+                        data: { questions: recoveredQuestions },
+                        recovered: true
+                    };
+                }
+                return null;
+            }
             const data = parseJsonWithRecovery(payload);
             if (!data) {
+                // Fallback 1: if fenced JSON is malformed, try to locate another valid balanced JSON candidate.
+                const balancedFromMarkdown = extractBalancedJsonPayload(String(markdown || ''));
+                if (balancedFromMarkdown && balancedFromMarkdown !== payload) {
+                    const balancedData = parseJsonWithRecovery(balancedFromMarkdown);
+                    if (balancedData) {
+                        return { payload: balancedFromMarkdown, data: balancedData };
+                    }
+                }
+
+                // Fallback 2: recover question items from partially broken JSON text.
+                const recoveredQuestions = extractLooseQuestionItems(payload || markdown);
+                if (recoveredQuestions.length) {
+                    return {
+                        payload,
+                        data: { questions: recoveredQuestions },
+                        recovered: true
+                    };
+                }
                 return null;
             }
             return { payload, data };
@@ -3069,6 +3097,107 @@
             } catch (error) {
                 return null;
             }
+        }
+
+        function decodeLooseJsonValue(token) {
+            const raw = String(token || '').trim();
+            if (!raw) return '';
+
+            if (raw.startsWith('"')) {
+                try {
+                    return JSON.parse(raw);
+                } catch (error) {
+                    return raw.replace(/^"+|"+$/g, '').replace(/\\"/g, '"');
+                }
+            }
+
+            return raw.replace(/[,\]\}]+$/g, '').trim();
+        }
+
+        function extractLooseFieldValue(text, fieldKeys) {
+            const source = String(text || '');
+            for (const key of fieldKeys) {
+                const pattern = new RegExp(`"${key}"\\s*:\\s*("([^"\\\\]|\\\\.)*"|[^,\\n\\r\\]}]+)`, 'i');
+                const match = source.match(pattern);
+                if (!match) continue;
+                const value = decodeLooseJsonValue(match[1]);
+                if (value) return String(value).trim();
+            }
+            return '';
+        }
+
+        function extractLooseOptions(chunk) {
+            const source = String(chunk || '');
+            const blockMatch = source.match(/"options"\s*:\s*\[([\s\S]*?)\]/i);
+            if (!blockMatch) return [];
+
+            const options = [];
+            const optionRegex = /"option"\s*:\s*("([^"\\]|\\.)*"|[^,\]\}\n\r]+)[\s\S]*?"content"\s*:\s*("([^"\\]|\\.)*"|[^,\]\}\n\r]+)/gi;
+            let optionMatch;
+            while ((optionMatch = optionRegex.exec(blockMatch[1])) !== null) {
+                const option = decodeLooseJsonValue(optionMatch[1]);
+                const content = decodeLooseJsonValue(optionMatch[3]);
+                if (!option || !content) continue;
+                options.push({
+                    option: String(option).trim(),
+                    content: String(content).trim()
+                });
+            }
+
+            return options;
+        }
+
+        function extractLooseQuestionItems(text) {
+            const source = String(text || '');
+            if (!source) return [];
+
+            const idRegex = /"id"\s*:\s*("([^"\\]|\\.)*"|\d+)/gi;
+            const anchors = [];
+            let idMatch;
+            while ((idMatch = idRegex.exec(source)) !== null) {
+                anchors.push({
+                    index: idMatch.index,
+                    id: decodeLooseJsonValue(idMatch[1])
+                });
+            }
+
+            if (!anchors.length) {
+                const questionRegex = /"question"\s*:/gi;
+                let questionMatch;
+                let autoIndex = 1;
+                while ((questionMatch = questionRegex.exec(source)) !== null) {
+                    anchors.push({
+                        index: questionMatch.index,
+                        id: String(autoIndex)
+                    });
+                    autoIndex += 1;
+                }
+                if (!anchors.length) {
+                    return [];
+                }
+            }
+
+            const items = [];
+            for (let i = 0; i < anchors.length; i += 1) {
+                const start = anchors[i].index;
+                const end = i + 1 < anchors.length ? anchors[i + 1].index : source.length;
+                const chunk = source.slice(start, end);
+
+                const question = extractLooseFieldValue(chunk, ['question', 'prompt', 'stem', 'statement', 'sentence', 'text', 'content']);
+                if (!question) continue;
+
+                const answer = extractLooseFieldValue(chunk, ['answer', 'correct_answer', 'correctAnswer', 'reference_answer', 'referenceAnswer']);
+                const options = extractLooseOptions(chunk);
+
+                items.push({
+                    id: String(anchors[i].id || items.length + 1),
+                    question,
+                    options,
+                    answer
+                });
+            }
+
+            return items;
         }
 
         function pickFirstValue(source, keys) {
@@ -3585,7 +3714,7 @@
                     if (!isFinal) {
                         return renderQuestionLoadingHtml();
                     }
-                    return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
+                    return renderStructuredFallback(markdown, 'JSON 输出不完整或格式错误，无法渲染题目。');
                 }
                 const quizHtml = buildQuizHtml(parsed.data, currentFileName, 'mcq', isFinal);
                 return quizHtml;
@@ -3595,7 +3724,7 @@
                     if (!isFinal) {
                         return renderQuestionLoadingHtml();
                     }
-                    return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
+                    return renderStructuredFallback(markdown, 'JSON 输出不完整或格式错误，无法渲染题目。');
                 }
                 const quizHtml = buildQuizHtml(parsed.data, currentFileName, 'tf', isFinal);
                 return quizHtml;
@@ -3605,7 +3734,7 @@
                     if (!isFinal) {
                         return renderQuestionLoadingHtml();
                     }
-                    return renderStructuredFallback(markdown, '正在等待完整 JSON 输出...');
+                    return renderStructuredFallback(markdown, 'JSON 输出不完整或格式错误，无法渲染题目。');
                 }
                 const questionHtml = buildQuestionListHtml(parsed.data, currentFileName, isFinal);
                 return questionHtml;

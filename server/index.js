@@ -445,7 +445,7 @@ async function bootstrap() {
         httpOnly: true,
         sameSite: 'lax',
         secure: 'auto',
-        maxAge: 30 * 60 * 1000  // 30 分钟后过期
+        maxAge: 3 * 60 * 60 * 1000  // 3 小时后过期
       }
     })
   );
