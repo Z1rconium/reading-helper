@@ -828,6 +828,7 @@ async function bootstrap() {
       if (!upstreamResponse.ok || !upstreamResponse.body) {
         const errorText = await upstreamResponse.text();
         sendSseChunk(res, { error: errorText || `上游请求失败: ${upstreamResponse.status}` });
+        sendSseChunk(res, { delta: `\n\n*模型: ${providerConfig.api_model}*` });
         res.write('data: [DONE]\n\n');
         return res.end();
       }
@@ -860,6 +861,7 @@ async function bootstrap() {
         relayUpstreamChunk(buffer, res);
       }
 
+      sendSseChunk(res, { delta: `\n\n*模型: ${providerConfig.api_model}*` });
       res.write('data: [DONE]\n\n');
       return res.end();
     } catch (error) {
@@ -868,6 +870,7 @@ async function bootstrap() {
       } else {
         sendSseChunk(res, { error: error.message || '流式请求失败' });
       }
+      sendSseChunk(res, { delta: `\n\n*模型: ${providerConfig.api_model}*` });
       res.write('data: [DONE]\n\n');
       return res.end();
     } finally {

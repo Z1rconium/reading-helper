@@ -2380,10 +2380,21 @@
                     cursorElement.remove();
                 }
 
-                renderAIResponse(streamingDiv, accumulatedText, operation, true);
+                const modelMatch = accumulatedText.match(/\n\n\*模型:\s*([^*]+)\*\s*$/);
+                const modelName = modelMatch ? modelMatch[1].trim() : null;
+                const contentWithoutModel = modelName ? accumulatedText.replace(/\n\n\*模型:\s*[^*]+\*\s*$/, '') : accumulatedText;
+
+                renderAIResponse(streamingDiv, contentWithoutModel, operation, true);
+
+                if (modelName && (operation === 'questions' || operation === 'mcqs' || operation === 'tf')) {
+                    const modelBadge = document.createElement('div');
+                    modelBadge.className = 'model-badge';
+                    modelBadge.textContent = `模型: ${modelName}`;
+                    streamingDiv.appendChild(modelBadge);
+                }
 
                 chatMessages.scrollTop = chatMessages.scrollHeight;
-                saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(accumulatedText, operation, true))).catch((error) => {
+                saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(contentWithoutModel, operation, true))).catch((error) => {
                     addSystemMessage(`保存对话失败: ${error.message}`);
                 });
             } catch (error) {

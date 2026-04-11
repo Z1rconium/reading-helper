@@ -2056,8 +2056,8 @@
             }
 
             .font-size-controls button {
-                width: 36px;
-                height: 34px;
+                width: 44px;
+                height: 44px;
                 font-size: 13px;
             }
 
@@ -2114,7 +2114,7 @@
             .action-buttons #morefuncs {
                 width: 100%;
                 min-width: 0;
-                min-height: 36px;
+                min-height: 44px;
                 border-radius: 12px;
                 font-size: 12px;
                 line-height: 1.2;
@@ -2274,6 +2274,23 @@
             .mindmap-stage {
                 min-height: 50vh;
             }
+        }
+
+        .model-badge {
+            position: absolute;
+            bottom: 8px;
+            left: 8px;
+            font-size: 11px;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.03);
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            pointer-events: none;
+        }
+
+        .ai-message {
+            position: relative;
         }
 
         @media (prefers-reduced-motion: reduce) {
