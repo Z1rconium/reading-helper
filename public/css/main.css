@@ -2277,20 +2277,12 @@
         }
 
         .model-badge {
-            position: absolute;
-            bottom: 8px;
-            left: 8px;
+            display: none;
+            padding: 8px 22px;
             font-size: 11px;
             color: var(--text-muted);
             background: rgba(255, 255, 255, 0.03);
-            padding: 4px 8px;
-            border-radius: 6px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            pointer-events: none;
-        }
-
-        .ai-message {
-            position: relative;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
         }
 
         @media (prefers-reduced-motion: reduce) {

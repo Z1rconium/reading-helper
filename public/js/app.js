@@ -413,6 +413,9 @@
                 if (authenticated) {
                     authModal.style.display = 'none';
                     startHeartbeat();
+                    if (data.apiModel) {
+                        showModelBadge(data.apiModel);
+                    }
                 } else {
                     serverFiles.clear();
                     updateFileList();
@@ -486,6 +489,9 @@
                 authModal.style.display = 'none';
                 logoutBtn.title = currentUserId ? `当前用户: ${currentUserId}` : '退出';
                 startHeartbeat();
+                if (data.apiModel) {
+                    showModelBadge(data.apiModel);
+                }
                 await fetchServerFileList();
                 updateFileList();
             } catch (error) {
@@ -2386,13 +2392,6 @@
 
                 renderAIResponse(streamingDiv, contentWithoutModel, operation, true);
 
-                if (modelName && (operation === 'questions' || operation === 'mcqs' || operation === 'tf')) {
-                    const modelBadge = document.createElement('div');
-                    modelBadge.className = 'model-badge';
-                    modelBadge.textContent = `模型: ${modelName}`;
-                    streamingDiv.appendChild(modelBadge);
-                }
-
                 chatMessages.scrollTop = chatMessages.scrollHeight;
                 saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(contentWithoutModel, operation, true))).catch((error) => {
                     addSystemMessage(`保存对话失败: ${error.message}`);
@@ -2434,6 +2433,18 @@
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
+        }
+
+        function showModelBadge(modelName) {
+            let modelBadge = document.getElementById('model-badge');
+            if (!modelBadge) {
+                modelBadge = document.createElement('div');
+                modelBadge.id = 'model-badge';
+                modelBadge.className = 'model-badge';
+                chatMessages.parentElement.appendChild(modelBadge);
+            }
+            modelBadge.textContent = `模型: ${modelName}`;
+            modelBadge.style.display = 'block';
         }
 
         const ASSISTANT_SANITIZE_TAGS = [
