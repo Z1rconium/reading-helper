@@ -1828,73 +1828,100 @@
                     const volume = parseFloat(volumeInput.value) || 1.0;
                     const pitch = parseFloat(pitchInput.value) || 1.0;
 
-
                     readAloudBtn.textContent = '停止';
                     readAloudBtn.classList.add('speaking');
                     isPlayingQueue = true;
 
                     // 分句处理：按句号、问号、感叹号分割
                     const sentences = currentSelection.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [currentSelection];
-                    let currentIndex = 0;
+                    const MAX_CONCURRENT = 3;
+                    let sentenceIndex = 0;
+                    let playIndex = 0;
+                    const audioCache = new Map();
+                    let activeFetches = 0;
+                    let isPlaying = false;
+
+                    const fetchAudio = async (index) => {
+                        if (index >= sentences.length || !isPlayingQueue) return;
+
+                        activeFetches++;
+                        try {
+                            const requestBody = {
+                                text: sentences[index].trim(),
+                                voice: selectedVoice,
+                                rate: `${rate >= 1 ? '+' : ''}${Math.round((rate - 1) * 100)}%`,
+                                volume: `${volume >= 1 ? '+' : ''}${Math.round((volume - 1) * 100)}%`,
+                                pitch: `${pitch >= 1 ? '+' : ''}${Math.round((pitch - 1) * 50)}Hz`
+                            };
+
+                            const response = await fetch(ttsEndpoint, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'X-CSRF-Token': getCsrfToken()
+                                },
+                                body: JSON.stringify(requestBody)
+                            });
+
+                            if (!response.ok) throw new Error('TTS服务请求失败');
+
+                            const audioBlob = await response.blob();
+                            const audioUrl = URL.createObjectURL(audioBlob);
+                            audioCache.set(index, audioUrl);
+
+                            if (index === playIndex && !isPlaying) playNext();
+                        } catch (error) {
+                            audioCache.set(index, null);
+                            if (index === playIndex && !isPlaying) playNext();
+                        } finally {
+                            activeFetches--;
+                            if (sentenceIndex < sentences.length && activeFetches < MAX_CONCURRENT) {
+                                fetchAudio(sentenceIndex++);
+                            }
+                        }
+                    };
 
                     const playNext = async () => {
-                        if (!isPlayingQueue || currentIndex >= audioQueue.length) {
-                            isPlayingQueue = false;
-                            audioQueue = [];
-                            readAloudBtn.textContent = '朗读';
-                            readAloudBtn.classList.remove('speaking');
+                        if (!isPlayingQueue || playIndex >= sentences.length || isPlaying) {
+                            if (playIndex >= sentences.length) {
+                                isPlayingQueue = false;
+                                audioCache.forEach(url => url && URL.revokeObjectURL(url));
+                                audioCache.clear();
+                                readAloudBtn.textContent = '朗读';
+                                readAloudBtn.classList.remove('speaking');
+                            }
                             return;
                         }
 
-                        const audioUrl = await audioQueue[currentIndex];
-                        currentIndex++;
+                        if (!audioCache.has(playIndex)) return;
 
-                        if (!isPlayingQueue) return;
+                        const audioUrl = audioCache.get(playIndex);
+                        playIndex++;
 
+                        if (!audioUrl) {
+                            playNext();
+                            return;
+                        }
+
+                        isPlaying = true;
                         currentAudio = new Audio(audioUrl);
                         currentAudio.onended = () => {
-                            URL.revokeObjectURL(audioUrl);
+                            isPlaying = false;
                             playNext();
                         };
                         currentAudio.onerror = () => {
-                            URL.revokeObjectURL(audioUrl);
+                            isPlaying = false;
                             playNext();
                         };
                         await currentAudio.play();
                     };
 
-                    // 并行请求所有句子的 TTS
-                    audioQueue = sentences.map(async (sentence) => {
-                        const requestBody = {
-                            text: sentence.trim(),
-                            voice: selectedVoice,
-                            rate: `${rate >= 1 ? '+' : ''}${Math.round((rate - 1) * 100)}%`,
-                            volume: `${volume >= 1 ? '+' : ''}${Math.round((volume - 1) * 100)}%`,
-                            pitch: `${pitch >= 1 ? '+' : ''}${Math.round((pitch - 1) * 50)}Hz`
-                        };
-
-                        const response = await fetch(ttsEndpoint, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'X-CSRF-Token': getCsrfToken()
-                            },
-                            body: JSON.stringify(requestBody)
-                        });
-
-                        if (!response.ok) {
-                            throw new Error('TTS服务请求失败');
-                        }
-
-                        const audioBlob = await response.blob();
-                        return URL.createObjectURL(audioBlob);
-                    });
-
-                    await playNext();
+                    for (let i = 0; i < Math.min(MAX_CONCURRENT, sentences.length); i++) {
+                        fetchAudio(sentenceIndex++);
+                    }
 
                 } catch (error) {
                     isPlayingQueue = false;
-                    audioQueue = [];
                     readAloudBtn.textContent = '朗读';
                     readAloudBtn.classList.remove('speaking');
                     addSystemMessage(`朗读失败: ${error.message}`);
