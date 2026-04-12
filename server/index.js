@@ -173,7 +173,8 @@ function isAnthropicApi(apiUrl) {
 function buildUpstreamHeaders(providerConfig) {
   const headers = {
     Accept: 'text/event-stream',
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'User-Agent': 'ReadingHelper/v2.3'
   };
 
   if (isAnthropicApi(providerConfig.api_url)) {
@@ -422,8 +423,8 @@ async function bootstrap() {
       "img-src 'self' data: https:; " +
       "font-src 'self' data:; " +
       "media-src 'self' blob:; " +
-      "connect-src 'self' https://kgzqxgimphwd.us-west-1.clawcloudrun.com https://edge-tts.shaynewong.dpdns.org https://cdn.jsdelivr.net; " +
-      "frame-src 'self'; " +
+      "connect-src 'self' https://edge-tts.shaynewong.dpdns.org https://cdn.jsdelivr.net https://challenges.cloudflare.com; " +
+      "frame-src 'self' https://challenges.cloudflare.com; " +
       "worker-src 'self' blob:;"
     );
     next();
@@ -466,81 +467,59 @@ async function bootstrap() {
 
   app.post('/api/auth/login', loginRateLimiter, async (req, res) => {
     const inputKey = typeof req.body?.accessKey === 'string' ? req.body.accessKey.trim() : '';
-    const capToken =
-      typeof req.body?.capToken === 'string'
-        ? req.body.capToken.trim()
-        : (typeof req.body?.turnstileToken === 'string' ? req.body.turnstileToken.trim() : '');
+    const turnstileToken =
+      typeof req.body?.turnstileToken === 'string'
+        ? req.body.turnstileToken.trim()
+        : '';
 
-    // 验证 Cap token
-    if (!capToken) {
+    if (!turnstileToken) {
       return res.status(400).json({ authenticated: false, error: '缺少人机验证' });
     }
 
     try {
-      const capApiEndpoint = (process.env.CAP_API_ENDPOINT || 'https://kgzqxgimphwd.us-west-1.clawcloudrun.com/ad54bf614d/').replace(/\/+$/, '/');
-      const capSecret = (process.env.CAP_SECRET || process.env.CAP_SECRET_KEY || '').trim();
-      const siteverifyUrl = new URL('siteverify', capApiEndpoint).toString();
-      const legacyVerifyUrl = new URL('verify', capApiEndpoint).toString();
+      const turnstileSecret =
+        (process.env.TURNSTILE_SECRET_KEY ||
+          process.env.CF_TURNSTILE_SECRET_KEY ||
+          '').trim();
 
-      let verifyResponse = null;
+      if (!turnstileSecret) {
+        console.error('Turnstile secret 未配置');
+        return res.status(500).json({ authenticated: false, error: '人机验证服务未配置' });
+      }
+
+      const verifyPayload = new URLSearchParams({
+        secret: turnstileSecret,
+        response: turnstileToken,
+        remoteip: typeof req.ip === 'string' ? req.ip : ''
+      });
+
+      const verifyResponse = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: verifyPayload.toString()
+      });
+
       let verifyData = null;
-      let usedEndpoint = '';
-
-      // Cap Standalone protocol: requires { secret, response } on /siteverify.
-      if (capSecret) {
-        usedEndpoint = siteverifyUrl;
-        verifyResponse = await fetch(siteverifyUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            secret: capSecret,
-            response: capToken
-          })
-        });
+      try {
         verifyData = await verifyResponse.json();
+      } catch (parseError) {
+        console.error('Turnstile 验证响应解析失败:', parseError);
+        return res.status(500).json({ authenticated: false, error: '人机验证服务异常' });
       }
 
-      // Legacy fallback for older custom verification services.
-      if (!verifyData?.success && (!capSecret || verifyResponse?.status === 404)) {
-        usedEndpoint = legacyVerifyUrl;
-        verifyResponse = await fetch(legacyVerifyUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            token: capToken
-          })
+      if (!verifyResponse.ok || verifyData?.success !== true) {
+        console.warn('Turnstile 验证未通过:', {
+          status: verifyResponse.status,
+          hasToken: !!turnstileToken,
+          errorCodes: Array.isArray(verifyData?.['error-codes']) ? verifyData['error-codes'] : [],
+          hostname: verifyData?.hostname || ''
         });
-        verifyData = await verifyResponse.json();
-      }
-
-      const verifySucceeded =
-        verifyData?.success === true ||
-        verifyData?.verified === true ||
-        verifyData?.valid === true;
-
-      if (!verifySucceeded) {
-        if (!capSecret && usedEndpoint === legacyVerifyUrl) {
-          console.error('Cap secret 未配置，且 legacy /verify 未验证通过:', {
-            endpoint: usedEndpoint,
-            status: verifyResponse?.status,
-            response: verifyData
-          });
-        } else {
-          console.warn('Cap 验证未通过:', {
-            endpoint: usedEndpoint,
-            status: verifyResponse?.status,
-            hasToken: !!capToken,
-            response: verifyData
-          });
-        }
         return res.status(400).json({ authenticated: false, error: '人机验证失败' });
       }
     } catch (error) {
-      console.error('Cap 验证失败:', error);
+      console.error('Turnstile 验证失败:', error);
       return res.status(500).json({ authenticated: false, error: '人机验证服务异常' });
     }
 
@@ -966,9 +945,6 @@ async function bootstrap() {
     },
     level: 6
   }));
-
-  // Serve node_modules for Cap.js widget
-  app.use('/node_modules', express.static(path.join(process.cwd(), 'node_modules')));
 
   // Static files with optimized caching strategy
   app.use(express.static(path.join(process.cwd(), 'public'), {

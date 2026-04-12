@@ -164,7 +164,14 @@
                     </div>
                 </div>
                 <div class="form-group auth-input-group">
-                    <cap-widget id="cap-widget" data-cap-api-endpoint="https://kgzqxgimphwd.us-west-1.clawcloudrun.com/ad54bf614d/"></cap-widget>
+                    <div
+                        id="turnstile-widget"
+                        class="cf-turnstile"
+                        data-sitekey="0x4AAAAAAC1l13SLEfc-2Yg6"
+                        data-callback="onTurnstileSuccess"
+                        data-expired-callback="onTurnstileExpired"
+                        data-error-callback="onTurnstileError"
+                    ></div>
                 </div>
                 <div class="modal-footer auth-footer">
                     <button class="save-btn auth-btn" id="login-btn" type="button" disabled>
@@ -230,7 +237,7 @@
             <div id="mindmap-stage" class="mindmap-stage"></div>
         </div>
     </div>
-    <script src="/js/vendor/cap-widget/cap.min.js?v=20260409-1"></script>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/markmap-lib@0.18.12/dist/browser/index.iife.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/markmap-view@0.18.12/dist/browser/index.js"></script>

@@ -1791,7 +1791,7 @@
             margin: 0 auto;
         }
 
-        .auth-input-group #cap-widget {
+        .auth-input-group #turnstile-widget {
             display: flex;
             justify-content: center;
             align-items: center;
@@ -1804,12 +1804,12 @@
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
         }
 
-        .auth-input-group #cap-widget:hover {
+        .auth-input-group #turnstile-widget:hover {
             background: rgba(255, 255, 255, 0.08);
             border-color: rgba(255, 255, 255, 0.16);
         }
 
-        .auth-input-group #cap-widget iframe {
+        .auth-input-group #turnstile-widget iframe {
             max-width: 100%;
             border-radius: 12px;
         }

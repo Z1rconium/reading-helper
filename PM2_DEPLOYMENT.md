@@ -63,7 +63,7 @@ mkdir -p config
 # cp config/users.config.example.json config/users.config.json
 ```
 
-编辑 `config/platform.config.json`：
+编辑 `v`：
 ```json
 {
   "session_secret": "your-random-secret-key-here"
