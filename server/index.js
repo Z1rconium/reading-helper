@@ -33,6 +33,7 @@ const {
   deleteConversation,
   deleteArticleChatStore
 } = require('./chat-store');
+const { getPreferences, savePreferences } = require('./preferences-store');
 const { assertValidUserId } = require('./user-paths');
 const { createSessionStore } = require('./session-store');
 const { cleanupOrphanedUsers } = require('./cleanup-orphaned-users');
@@ -678,6 +679,30 @@ async function bootstrap() {
       return res.json({ ok: true, prompt: saved });
     } catch (error) {
       return respondPromptStoreError(res, error);
+    }
+  });
+
+  app.get('/api/preferences', requireAuth, async (req, res) => {
+    const userId = validateRequestedUserId(req, res);
+    if (!userId) return;
+
+    try {
+      const preferences = await getPreferences(userId);
+      return res.json(preferences);
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/preferences', requireAuth, csrfProtection, async (req, res) => {
+    const userId = validateRequestedUserId(req, res);
+    if (!userId) return;
+
+    try {
+      const preferences = await savePreferences(userId, req.body);
+      return res.json(preferences);
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
     }
   });
 

@@ -486,6 +486,7 @@
                     resetPromptState();
                 }
                 currentUserId = nextUserId;
+                await loadPreferences();
                 authError.style.display = 'none';
                 authModal.style.display = 'none';
                 logoutBtn.title = currentUserId ? `当前用户: ${currentUserId}` : '退出';
@@ -1463,10 +1464,47 @@
             }
         });
 
+        async function loadPreferences() {
+            if (!currentUserId) return;
+            try {
+                const response = await fetch(`/api/preferences?userId=${encodeURIComponent(currentUserId)}`, {
+                    method: 'GET',
+                    credentials: 'include'
+                });
+                if (response.ok) {
+                    const prefs = await response.json();
+                    document.getElementById('speech-rate').value = prefs.speechRate || 0.9;
+                    document.getElementById('speech-volume').value = prefs.speechVolume || 1.0;
+                    document.getElementById('speech-pitch').value = prefs.speechPitch || 1.0;
+                }
+            } catch (error) {}
+        }
+
+        async function savePreferences() {
+            if (!currentUserId) return;
+            try {
+                const prefs = {
+                    speechRate: parseFloat(document.getElementById('speech-rate').value) || 0.9,
+                    speechVolume: parseFloat(document.getElementById('speech-volume').value) || 1.0,
+                    speechPitch: parseFloat(document.getElementById('speech-pitch').value) || 1.0
+                };
+                await fetch('/api/preferences', {
+                    method: 'PUT',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': getCsrfToken()
+                    },
+                    body: JSON.stringify({ userId: currentUserId, ...prefs })
+                });
+            } catch (error) {}
+        }
+
         window.addEventListener('load', async () => {
             const authenticated = await checkAuthStatus();
             if (authenticated) {
                 await fetchServerFileList();
+                await loadPreferences();
             }
             updateFileList();
         });
@@ -1482,6 +1520,10 @@
             if (!currentUserId) return;
             scheduleHeartbeat(0);
         });
+
+        document.getElementById('speech-rate').addEventListener('change', savePreferences);
+        document.getElementById('speech-volume').addEventListener('change', savePreferences);
+        document.getElementById('speech-pitch').addEventListener('change', savePreferences);
 
         refreshFileListBtn.addEventListener('click', async () => {
             await fetchServerFileList();
