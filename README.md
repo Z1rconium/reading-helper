@@ -156,9 +156,9 @@ reading-helper/
 ## ✨ Core Features
 
 ### 🔐 Authentication & Security
-- Session-based authentication with 30-minute timeout
+- Session-based authentication with 3-hour timeout
 - Access key validation from `users.config.json`
-- **Cap.js CAPTCHA human verification** on login page (supports standalone and legacy protocols)
+- **Cloudflare Turnstile CAPTCHA verification** on login page
 - Login rate limiting (5 attempts per 15 minutes)
 - CSRF protection via cookie + header validation
 - HTML sanitization (server: sanitize-html, client: DOMPurify)
@@ -199,7 +199,7 @@ reading-helper/
   - Word explanation (definitions, phonetics, collocations)
   - Sentence analysis (grammar, structure, translation)
   - Rainbow sentence parsing (JSON syntax tree)
-  - Paragraph translation & summarization
+  - Paragraph summarization
   - Summary evaluation
   - Mind map generation
   - Multiple-choice, true/false, and open-ended questions
@@ -210,7 +210,10 @@ reading-helper/
 - Adjustable font size (A+/A- controls)
 - Text selection triggers (word/sentence/paragraph)
 - Text-to-speech with adjustable speed/volume/pitch (Web Speech API + Edge TTS streaming)
+- Persistent user preferences for speech settings (speed, volume, pitch, voice)
+- Concurrent audio fetching for improved TTS performance
 - Article context toggle (max 12,000 characters)
+- Model badge display showing which AI model generated each response
 - Structured output rendering:
   - Syntax tree visualization (collapsible)
   - Interactive quiz components (MCQ, True/False, Q&A)
@@ -273,23 +276,19 @@ npm install
 - `accessKey`: Must be unique across all users
 - `api_url`: Auto-detects provider type (OpenAI/Anthropic)
 
-**3. Cap.js CAPTCHA Configuration:**
+**3. Cloudflare Turnstile Configuration:**
 
-The application uses Cap.js CAPTCHA for human verification on the login page. Configuration:
-- **Frontend**: Cap.js widget loaded from `public/js/vendor/cap-widget/cap.min.js`
-- **Backend**: API endpoint and secret configured via environment variables
+The application uses Cloudflare Turnstile for CAPTCHA verification on the login page. Configuration:
+- **Frontend**: Turnstile widget loaded from Cloudflare CDN
+- **Backend**: Site verification via Cloudflare API
+
+Get your Turnstile keys at: https://dash.cloudflare.com/
 
 Environment variables:
 ```bash
-export CAP_API_ENDPOINT="https://your-cap-instance.com/"
-export CAP_SECRET="your-cap-secret"  # Optional, for standalone protocol
+export TURNSTILE_SITE_KEY="your-site-key"
+export TURNSTILE_SECRET_KEY="your-secret-key"
 ```
-
-**Modifying Cap.js Widget:**
-The project uses a forked Cap.js widget in `.vendor/cap-widget-fork/`. To modify:
-1. Edit source files in `.vendor/cap-widget-fork/widget/src/src/`
-2. Rebuild: `cd .vendor/cap-widget-fork/widget && node build-node.mjs`
-3. Copy output: `cp src/cap.min.js ../../../public/js/vendor/cap-widget/cap.min.js`
 
 **4. Environment Variables:**
 
@@ -298,8 +297,8 @@ export REDIS_URL="redis://127.0.0.1:6379"
 export PORT=3000
 export CONFIG_DIR="./config"
 export USER_DATA_ROOT="./data/users"
-export CAP_API_ENDPOINT="https://your-cap-instance.com/"
-export CAP_SECRET="your-cap-secret"  # Optional
+export TURNSTILE_SITE_KEY="your-site-key"
+export TURNSTILE_SECRET_KEY="your-secret-key"
 export MAX_UPLOAD_BYTES=2097152  # Optional, default 2MB
 export TRUST_PROXY=1  # Optional, for reverse proxy
 ```
@@ -400,16 +399,16 @@ location / {
 - For cross-origin requests, configure CORS properly and use `credentials: 'include'`
 - Clear browser cookies and retry
 
-### Cap.js CAPTCHA Verification Failures
+### Cloudflare Turnstile Verification Failures
 
 **Symptom:** Login button remains disabled or CAPTCHA fails to load
 
 **Solution:**
-- Verify `CAP_API_ENDPOINT` environment variable is set correctly
-- Check browser console for Cap.js widget loading errors
-- Ensure Cap.js API endpoint is accessible (not blocked by firewall)
+- Verify `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` environment variables are set correctly
+- Check browser console for Turnstile widget loading errors
+- Ensure Cloudflare Turnstile endpoints are accessible (not blocked by firewall)
 - Try refreshing the page to reload CAPTCHA widget
-- For standalone protocol, verify `CAP_SECRET` is configured
+- Verify your Turnstile keys are valid at https://dash.cloudflare.com/
 - Check server logs for CAPTCHA verification errors
 
 ### SSE Streaming Issues

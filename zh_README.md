@@ -156,9 +156,9 @@ reading-helper/
 ## ✨ 核心功能
 
 ### 🔐 认证与安全
-- 基于会话的认证，30 分钟超时
+- 基于会话的认证，3 小时超时
 - 从 `users.config.json` 验证访问密钥
-- **登录页面集成 Cap.js CAPTCHA 人机验证**（支持独立和传统协议）
+- **登录页面集成 Cloudflare Turnstile CAPTCHA 验证**
 - 登录速率限制（15 分钟内最多 5 次尝试）
 - 通过 cookie + header 验证实现 CSRF 防护
 - HTML 清洗（服务端：sanitize-html，客户端：DOMPurify）
@@ -199,7 +199,7 @@ reading-helper/
   - 单词解释（定义、音标、搭配）
   - 句子分析（语法、结构、翻译）
   - 彩虹拆句（JSON 语法树）
-  - 段落翻译和概括
+  - 段落概括
   - 概括评估
   - 思维导图生成
   - 多项选择题、判断题和开放题
@@ -210,7 +210,10 @@ reading-helper/
 - 可调节字体大小（A+/A- 控制）
 - 文本选择触发器（单词/句子/段落）
 - 文本转语音，可调节语速/音量/音调（Web Speech API + Edge TTS 流式传输）
+- 持久化用户语音设置偏好（语速、音量、音调、语音选择）
+- 并发音频获取以提升 TTS 性能
 - 文章上下文开关（最多 12,000 字符）
+- 模型徽章显示，显示生成每个响应的 AI 模型
 - 结构化输出渲染：
   - 语法树可视化（可折叠）
   - 交互式测验组件（选择题、判断题、问答题）
@@ -273,23 +276,19 @@ npm install
 - `accessKey`：所有用户中必须唯一
 - `api_url`：自动检测提供商类型（OpenAI/Anthropic）
 
-**3. Cap.js CAPTCHA 配置：**
+**3. Cloudflare Turnstile 配置：**
 
-应用程序在登录页面使用 Cap.js CAPTCHA 进行人机验证。配置：
-- **前端**：从 `public/js/vendor/cap-widget/cap.min.js` 加载 Cap.js 组件
-- **后端**：通过环境变量配置 API 端点和密钥
+应用程序在登录页面使用 Cloudflare Turnstile 进行 CAPTCHA 验证。配置：
+- **前端**：从 Cloudflare CDN 加载 Turnstile 组件
+- **后端**：通过 Cloudflare API 进行站点验证
+
+在 https://dash.cloudflare.com/ 获取您的 Turnstile 密钥
 
 环境变量：
 ```bash
-export CAP_API_ENDPOINT="https://your-cap-instance.com/"
-export CAP_SECRET="your-cap-secret"  # 可选，用于独立协议
+export TURNSTILE_SITE_KEY="your-site-key"
+export TURNSTILE_SECRET_KEY="your-secret-key"
 ```
-
-**修改 Cap.js 组件：**
-项目使用 `.vendor/cap-widget-fork/` 中的 fork 版本。修改步骤：
-1. 编辑 `.vendor/cap-widget-fork/widget/src/src/` 中的源文件
-2. 重新构建：`cd .vendor/cap-widget-fork/widget && node build-node.mjs`
-3. 复制输出：`cp src/cap.min.js ../../../public/js/vendor/cap-widget/cap.min.js`
 
 **4. 环境变量：**
 
@@ -298,8 +297,8 @@ export REDIS_URL="redis://127.0.0.1:6379"
 export PORT=3000
 export CONFIG_DIR="./config"
 export USER_DATA_ROOT="./data/users"
-export CAP_API_ENDPOINT="https://your-cap-instance.com/"
-export CAP_SECRET="your-cap-secret"  # 可选
+export TURNSTILE_SITE_KEY="your-site-key"
+export TURNSTILE_SECRET_KEY="your-secret-key"
 export MAX_UPLOAD_BYTES=2097152  # 可选，默认 2MB
 export TRUST_PROXY=1  # 可选，用于反向代理
 ```
@@ -400,16 +399,16 @@ location / {
 - 对于跨域请求，正确配置 CORS 并使用 `credentials: 'include'`
 - 清除浏览器 cookie 并重试
 
-### Cap.js CAPTCHA 验证失败
+### Cloudflare Turnstile 验证失败
 
 **症状：** 登录按钮保持禁用或 CAPTCHA 无法加载
 
 **解决方案：**
-- 验证 `CAP_API_ENDPOINT` 环境变量设置正确
-- 检查浏览器控制台中的 Cap.js 组件加载错误
-- 确保 Cap.js API 端点可访问（未被防火墙阻止）
+- 验证 `TURNSTILE_SITE_KEY` 和 `TURNSTILE_SECRET_KEY` 环境变量设置正确
+- 检查浏览器控制台中的 Turnstile 组件加载错误
+- 确保 Cloudflare Turnstile 端点可访问（未被防火墙阻止）
 - 尝试刷新页面重新加载 CAPTCHA 组件
-- 对于独立协议，验证 `CAP_SECRET` 已配置
+- 在 https://dash.cloudflare.com/ 验证您的 Turnstile 密钥有效
 - 检查服务器日志中的 CAPTCHA 验证错误
 
 ### SSE 流式传输问题
