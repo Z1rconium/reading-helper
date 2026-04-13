@@ -1,266 +1,198 @@
-# Reading Helper
+# 📚 Reading Helper
 
-English | [简体中文](zh_README.md)
+> 基于 AI 的多用户英语阅读辅助平台，支持词汇解释、句子分析、段落总结、思维导图生成等功能
 
-A Node.js-based English reading assistant with AI integration, designed for multi-user environments with isolated data storage and streaming AI responses.
+## 项目概述
 
-## 📋 Project Overview
+Reading Helper 是一个全栈 Web 应用，为英语学习者提供智能阅读辅助。用户可以上传英文文章，通过 AI 对话获得词汇解释、语法分析、内容总结等帮助。系统支持多用户隔离、会话持久化、CET 词汇高亮、语音朗读等功能。
 
-Reading Helper is a full-stack web application that combines text file management, AI-powered language learning features, and multi-user authentication. The system provides a modern single-page application frontend with a robust Express backend handling user authentication, file persistence, conversation history, and AI provider abstraction via Server-Sent Events (SSE).
+**核心特性：**
+- 🔐 基于 Redis 的会话认证系统
+- 👥 多用户数据完全隔离
+- 🤖 支持多种 AI 提供商（OpenAI、Anthropic、自定义 API）
+- 💬 对话历史持久化（每篇文章支持多个独立会话）
+- 📝 可自定义系统提示词模板
+- 🎯 CET4/CET6 词汇智能高亮
+- 🔊 Edge TTS 语音朗读
+- 🧠 思维导图可视化（基于 D3.js + markmap）
+- 🔒 CSRF 保护 + 验证码防护（Cloudflare Turnstile）
+- ⚡ PM2 集群模式部署
 
-**Key Characteristics:**
-- Multi-user isolation with session-based authentication
-- Support for multiple AI providers (OpenAI Chat Completions, OpenAI Responses, Anthropic Messages)
-- Real-time streaming AI responses via SSE
-- Persistent conversation history per article
-- Customizable system prompts per user
-- File upload with Chinese filename support
-- CET4/CET6 vocabulary highlighting
+## 技术架构
 
-## 🏗️ Technical Architecture
+### 后端技术栈
+- **运行时**: Node.js ≥18
+- **框架**: Express.js
+- **会话存储**: Redis + connect-redis
+- **文件上传**: Multer
+- **HTML 清理**: sanitize-html
+- **压缩**: compression (Gzip/Brotli)
+- **安全**: express-rate-limit, CSRF token, Cloudflare Turnstile
 
-### System Layers
+### 前端技术栈
+- **原生 JavaScript** (~4200 行，模块化架构)
+- **CSS** (~2300 行，语义化设计)
+- **可视化**: D3.js + markmap
+- **语音**: Web Speech API + Edge TTS
+
+### 数据流架构
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Frontend (Single-Page Application)                     │
-│  • HTML (227 lines) + CSS (~2300 lines) + JS (~7800 lines)│
-│  • Modular architecture (core/utils/modules)            │
-│  • D3.js & Markmap for visualizations                   │
-│  • EventSource for SSE streaming                        │
-└─────────────────────────────────────────────────────────┘
-                          ↓ HTTP/SSE
-┌─────────────────────────────────────────────────────────┐
-│  Express Backend (Node.js, 1013 lines)                  │
-│  ├─ Authentication Layer                                │
-│  │  • express-session + Redis                           │
-│  │  • Cap.js CAPTCHA verification                       │
-│  │  • CSRF protection (cookie + header)                 │
-│  │  • Rate limiting (15min/5 attempts)                  │
-│  ├─ Data Isolation Layer                                │
-│  │  • Per-user file storage                             │
-│  │  • Per-article conversation history                  │
-│  │  • User-specific prompt templates                    │
-│  └─ AI Provider Abstraction                             │
-│     • Auto-detection (OpenAI/Anthropic)                 │
-│     • SSE streaming proxy with connection pooling       │
-│     • Request/response format adaptation                │
-└─────────────────────────────────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────┐
-│  Storage & External Services                            │
-│  • Redis: Session persistence (30-minute timeout)       │
-│  • Filesystem: User data (uploads/chats/prompts)        │
-│  • Upstream AI APIs: OpenAI/Anthropic                   │
-└─────────────────────────────────────────────────────────┘
+┌─────────────┐
+│   用户登录   │ ──> accessKey 验证 + Cloudflare Turnstile
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────┐
+│              Express 中间件层                    │
+│  Session │ CSRF │ Rate Limit │ Compression      │
+└──────────────────┬──────────────────────────────┘
+                   │
+       ┌───────────┼───────────┐
+       ▼           ▼           ▼
+┌──────────┐ ┌──────────┐ ┌──────────┐
+│ 文件管理  │ │ 提示词库  │ │ 对话存储  │
+│  .txt    │ │  .md     │ │  .json   │
+└──────────┘ └──────────┘ └──────────┘
+       │           │           │
+       └───────────┼───────────┘
+                   ▼
+        ┌─────────────────────┐
+        │   AI 提供商抽象层    │
+        │ OpenAI / Anthropic  │
+        │   自定义 API 端点    │
+        └──────────┬──────────┘
+                   │
+                   ▼
+            SSE 流式响应
 ```
 
-### Technology Stack
-
-**Backend:**
-- Runtime: Node.js ≥18
-- Framework: Express 4.x
-- Session: express-session + connect-redis
-- Storage: Redis (sessions), Filesystem (user data)
-- Security: sanitize-html, express-rate-limit, CSRF protection, Cap.js CAPTCHA
-- File Upload: multer (max 2MB)
-- Compression: compression middleware with optimized settings
-- HTTP Connection Pooling: keepAlive agents for AI requests
-
-**Frontend:**
-- Vanilla JavaScript (ES6+) with modular architecture
-  - Core: state management, DOM utilities
-  - Utils: API client, helpers
-  - Modules: vocab highlighting, speech synthesis, mindmap
-- D3.js (data visualization)
-- Markmap (mind map rendering)
-- DOMPurify (client-side HTML sanitization)
-- Web Speech API + Edge TTS streaming
-- Cap.js CAPTCHA widget (forked)
-- Responsive design with resizable panels
-
-**AI Integration:**
-- OpenAI Chat Completions API
-- OpenAI Responses API
-- Anthropic Messages API (with proper headers)
-- Auto-detection based on API URL pattern
-- 120-second request timeout for chat, 30s for TTS
-- SSE streaming with buffer overflow protection
-- HTTP connection pooling with keepAlive
-- Edge TTS API proxy with zero-memory streaming
-
-## 📁 Project Structure
+## 项目结构
 
 ```
 reading-helper/
-├── config/                          # Configuration files
-│   ├── platform.config.json         # Session secret
-│   ├── users.config.json            # User credentials & AI provider configs
-│   ├── cet_word_list.txt            # CET4/CET6 vocabulary list (cached in memory)
-│   └── prompts/                     # Default system prompt templates
+├── server/                          # 后端服务
+│   ├── index.js                     # 主服务器 (1018 行)
+│   ├── config-loader.js             # 配置加载器
+│   ├── session-store.js             # Redis 会话存储
+│   ├── csrf-protection.js           # CSRF 防护
+│   ├── file-store.js                # 文件上传/管理
+│   ├── prompt-store.js              # 提示词模板管理
+│   ├── chat-store.js                # 对话历史持久化
+│   ├── preferences-store.js         # 用户偏好设置
+│   ├── user-paths.js                # 用户路径计算
+│   └── cleanup-orphaned-users.js    # 孤立数据清理
+│
+├── public/                          # 前端资源
+│   ├── index.html                   # 主页面
+│   ├── css/
+│   │   └── main.css                 # 应用样式 (~2300 行)
+│   └── js/
+│       ├── main.js                  # 入口文件
+│       ├── app.js                   # 主应用逻辑
+│       ├── core/
+│       │   ├── state.js             # 状态管理
+│       │   └── dom.js               # DOM 操作
+│       ├── utils/
+│       │   ├── api.js               # API 客户端
+│       │   └── helpers.js           # 工具函数
+│       ├── modules/
+│       │   ├── vocab.js             # CET 词汇高亮
+│       │   ├── speech.js            # 语音朗读
+│       │   └── mindmap.js           # 思维导图
+│       └── vendor/                   # 第三方库（D3.js, markmap）
+│
+├── config/                          # 配置文件
+│   ├── platform.config.json         # 平台配置（会话密钥）
+│   ├── users.config.json            # 用户配置（API 密钥）
+│   └── prompts/                     # 默认提示词模板
 │       ├── explain-word.md
 │       ├── analyze-sentence.md
-│       ├── color-sentence.md
 │       ├── summarize-paragraph.md
-│       ├── translate-paragraph.md
-│       ├── summary-evaluation.md
-│       ├── mcq.md
-│       ├── qa.md
-│       ├── tf.md
 │       ├── mindmap.md
-│       └── send-button.md
-├── data/
-│   └── users/                       # User-isolated data storage
-│       └── <userId>/
-│           ├── uploads/             # Uploaded text files
-│           ├── chats/               # Conversation histories
-│           │   └── <articleBase64>/
-│           │       └── <uuid>.json
-│           └── prompts/             # User-edited prompts
-├── server/                          # Backend modules
-│   ├── index.js                     # Main Express app & routes (864 lines)
-│   ├── config-loader.js             # Config validation & loading
-│   ├── session-store.js             # Redis session store setup
-│   ├── file-store.js                # File upload/read/delete
-│   ├── chat-store.js                # Conversation persistence
-│   ├── prompt-store.js              # Prompt template management
-│   ├── user-paths.js                # User directory path resolution
-│   ├── csrf-protection.js           # CSRF token validation
-│   └── cleanup-orphaned-users.js    # Startup cleanup utility
-├── public/
-│   ├── index.html                   # Main HTML structure (227 lines)
-│   ├── css/
-│   │   └── main.css                 # Styles (~2300 lines)
-│   └── js/
-│       ├── main.js                  # Application entry point
-│       ├── core/
-│       │   ├── state.js             # State management
-│       │   └── dom.js               # DOM utilities
-│       ├── utils/
-│       │   ├── api.js               # API client
-│       │   └── helpers.js           # Helper functions
-│       ├── modules/
-│       │   ├── vocab.js             # CET vocabulary highlighting
-│       │   ├── speech.js            # Text-to-speech
-│       │   └── mindmap.js           # Mindmap visualization
-│       └── vendor/
-│           └── cap-widget/          # Cap.js CAPTCHA widget
-├── logs/                            # PM2 log output (created at runtime)
-├── .vendor/
-│   └── cap-widget-fork/             # Forked Cap.js widget source
-├── ecosystem.config.js              # PM2 cluster configuration
-├── package.json
-└── README.md
+│       └── ...
+│
+├── data/users/                      # 用户数据目录
+│   └── <userId>/
+│       ├── uploads/                 # 上传的文章
+│       ├── chats/<articleBase64>/   # 对话历史
+│       ├── prompts/                 # 用户自定义提示词
+│       └── preferences.json         # 用户偏好设置
+│
+├── ecosystem.config.js              # PM2 配置
+└── package.json
 ```
 
-## ✨ Core Features
+## 核心功能
 
-### 🔐 Authentication & Security
-- Session-based authentication with 3-hour timeout
-- Access key validation from `users.config.json`
-- **Cloudflare Turnstile CAPTCHA verification** on login page
-- Login rate limiting (5 attempts per 15 minutes)
-- CSRF protection via cookie + header validation
-- HTML sanitization (server: sanitize-html, client: DOMPurify)
-- Automatic cleanup of orphaned user directories on startup
-- Secure session cookies with httpOnly and sameSite protection
+### 1. 用户认证与会话管理
+- **登录验证**: 基于 `accessKey` 的无密码认证
+- **验证码保护**: Cloudflare Turnstile（无需用户交互的智能验证）
+- **会话持久化**: Redis 存储，30 分钟无活动超时
+- **登录限流**: 15 分钟内最多 5 次尝试
+- **CSRF 防护**: Cookie + Header 双重验证
 
-### 📄 File Management
-- Upload `.txt`, `.text`, and `.md` files (max 2MB, configurable)
-- Chinese filename support with proper encoding
-- List, read, and delete operations
-- Automatic chat history cleanup on file deletion
-- Path traversal protection with filename validation
+### 2. 文件管理
+- **支持格式**: `.txt`, `.text`, `.md`
+- **文件大小**: 默认 2MB 上限（可配置）
+- **中文文件名**: 完整支持
+- **路径安全**: 防止路径遍历攻击
+- **关联清理**: 删除文章时自动清理对话历史
 
-### 💬 Conversation System
-- Multi-turn conversation persistence per article
-- Conversation history stored as individual JSON files
-- List, create, append, clear, and delete operations
-- Automatic migration from legacy single-file format
-- Base64url-encoded article names for directory safety
+### 3. AI 对话系统
+- **多提供商支持**:
+  - OpenAI Chat Completions API
+  - Anthropic Messages API
+  - OpenAI Responses API
+  - 自定义兼容端点
+- **自动检测**: 根据 `api_url` 自动选择请求格式
+- **流式响应**: SSE (Server-Sent Events) 实时输出
+- **连接复用**: HTTP Keep-Alive 连接池（最多 10 个连接）
+- **超时控制**: 120 秒请求超时
 
-### 🤖 AI Integration
-- Automatic provider detection based on API URL pattern:
-  - URLs containing `anthropic` or ending with `/messages` → Anthropic Messages API
-  - URLs ending with `/responses` → OpenAI Responses API
-  - Otherwise → OpenAI Chat Completions API
-- SSE streaming for real-time token-by-token rendering
-- 120-second request timeout with abort controller
-- Per-user API configuration (URL, key, model)
-- HTTP connection pooling with keepAlive for performance
-- Buffer overflow protection (10KB max SSE buffer)
-- Proper Anthropic API headers (`Authorization`, `x-api-key`, `anthropic-version`)
+### 4. 提示词模板系统
+- **预置模板**: 11 种场景（词汇解释、句子分析、段落总结等）
+- **用户隔离**: 每个用户独立编辑，互不影响
+- **首次复制**: 从 `config/prompts/` 自动复制到用户目录
+- **实时保存**: 编辑后立即持久化
 
-### 📝 Prompt Management
-- Default templates in `config/prompts/`
-- Automatic per-user copy on first access
-- User-editable prompts stored in `data/users/<userId>/prompts/`
-- Built-in templates:
-  - Word explanation (definitions, phonetics, collocations)
-  - Sentence analysis (grammar, structure, translation)
-  - Rainbow sentence parsing (JSON syntax tree)
-  - Paragraph summarization
-  - Summary evaluation
-  - Mind map generation
-  - Multiple-choice, true/false, and open-ended questions
-  - Send button (general Q&A)
+### 5. 对话历史管理
+- **多会话支持**: 每篇文章可创建多个独立对话
+- **自动迁移**: 旧版单文件格式自动升级为多会话格式
+- **UUID 标识**: 每个会话使用唯一 ID
+- **HTML 清理**: 响应内容自动清理 XSS 风险标签
 
-### 🎨 Frontend Features
-- Resizable reading panel with drag handles
-- Adjustable font size (A+/A- controls)
-- Text selection triggers (word/sentence/paragraph)
-- Text-to-speech with adjustable speed/volume/pitch (Web Speech API + Edge TTS streaming)
-- Persistent user preferences for speech settings (speed, volume, pitch, voice)
-- Concurrent audio fetching for improved TTS performance
-- Article context toggle (max 12,000 characters)
-- Model badge display showing which AI model generated each response
-- Structured output rendering:
-  - Syntax tree visualization (collapsible)
-  - Interactive quiz components (MCQ, True/False, Q&A)
-  - Mind map rendering via Markmap
-- CET4/CET6 vocabulary highlighting (cached in memory)
-- Responsive design with modern UI
-- Real-time SSE streaming display
-- Performance monitoring (memory usage logged every 5 minutes, slow request logging)
+### 6. 前端增强功能
+- **CET 词汇高亮**: 服务端缓存词表，前端实时标注
+- **语音朗读**: Edge TTS 流式代理（零内存缓冲）
+- **思维导图**: D3.js + markmap 可视化
+- **响应式设计**: 适配桌面和移动端
 
-## 🚀 PM2 Deployment
+## 快速开始
 
-### Prerequisites
+### 环境要求
+- Node.js ≥ 18
+- Redis ≥ 6（必须运行）
 
-- Node.js ≥18
-- Redis ≥6
-- PM2 (install globally: `npm install -g pm2`)
-- **Production environment: Debian 13** (do not test on macOS)
-
-### Installation
-
+### 安装依赖
 ```bash
-# Clone repository
-git clone <repository-url>
-cd reading-helper
-
-# Install dependencies
 npm install
 ```
 
-### Configuration
-
-**1. Platform Configuration (`config/platform.config.json`):**
-
-```json
-{
-  "session_secret": "REPLACE_WITH_STRONG_RANDOM_SECRET"
-}
+### 配置环境变量
+```bash
+export REDIS_URL="redis://127.0.0.1:6379"
+export TURNSTILE_SECRET_KEY="your-cloudflare-turnstile-secret"
 ```
 
-**2. User Configuration (`config/users.config.json`):**
-
+### 配置用户
+编辑 `config/users.config.json`:
 ```json
 {
   "users": [
     {
       "userId": "demo",
-      "accessKey": "REPLACE_WITH_SECURE_ACCESS_KEY",
+      "accessKey": "your-secret-key",
       "provider": {
         "api_url": "https://api.openai.com/v1/chat/completions",
         "api_key": "sk-...",
@@ -271,221 +203,285 @@ npm install
 }
 ```
 
-**Validation Rules:**
-- `userId`: Alphanumeric, underscore, and hyphen only
-- `accessKey`: Must be unique across all users
-- `api_url`: Auto-detects provider type (OpenAI/Anthropic)
+### 启动服务
 
-**3. Cloudflare Turnstile Configuration:**
-
-The application uses Cloudflare Turnstile for CAPTCHA verification on the login page. Configuration:
-- **Frontend**: Turnstile widget loaded from Cloudflare CDN
-- **Backend**: Site verification via Cloudflare API
-
-Get your Turnstile keys at: https://dash.cloudflare.com/
-
-Environment variables:
+**开发模式（热重载）:**
 ```bash
-export TURNSTILE_SITE_KEY="your-site-key"
-export TURNSTILE_SECRET_KEY="your-secret-key"
+npm run dev
 ```
 
-**4. Environment Variables:**
-
+**生产模式:**
 ```bash
-export REDIS_URL="redis://127.0.0.1:6379"
-export PORT=3000
-export CONFIG_DIR="./config"
-export USER_DATA_ROOT="./data/users"
-export TURNSTILE_SITE_KEY="your-site-key"
-export TURNSTILE_SECRET_KEY="your-secret-key"
-export MAX_UPLOAD_BYTES=2097152  # Optional, default 2MB
-export TRUST_PROXY=1  # Optional, for reverse proxy
+npm start
 ```
 
-### PM2 Startup
-
+**自定义路径:**
 ```bash
-# Start in cluster mode (4 instances)
+REDIS_URL="redis://127.0.0.1:6379" \
+CONFIG_DIR=./config \
+USER_DATA_ROOT=./data/users \
+npm start
+```
+
+访问 `http://localhost:3000`
+
+## PM2 部署
+
+### 启动集群
+```bash
 pm2 start ecosystem.config.js
-
-# View status
-pm2 list
-
-# View logs
-pm2 logs reading-helper
-
-# Monitor resources
-pm2 monit
 ```
 
-### PM2 Management Commands
-
+### 管理命令
 ```bash
-# Restart application
-pm2 restart reading-helper
-
-# Reload with zero-downtime
-pm2 reload reading-helper
-
-# Stop application
-pm2 stop reading-helper
-
-# Delete from PM2
-pm2 delete reading-helper
-
-# Save current process list
-pm2 save
-
-# Setup startup script
-pm2 startup
-# Follow the displayed command (may require sudo)
+pm2 list                    # 查看状态
+pm2 logs reading-helper     # 查看日志
+pm2 restart reading-helper  # 重启服务
+pm2 reload reading-helper   # 零停机重载
+pm2 stop reading-helper     # 停止服务
+pm2 delete reading-helper   # 删除进程
 ```
 
-### Cluster Configuration
-
-The included `ecosystem.config.js` runs 4 instances by default. Adjust based on CPU cores:
-
-```javascript
-module.exports = {
-  apps: [{
-    name: 'reading-helper',
-    script: './server/index.js',
-    instances: 'max',  // Use all available CPU cores
-    exec_mode: 'cluster',
-    max_memory_restart: '500M',
-    // ...
-  }]
-};
-```
-
-### Reverse Proxy (Nginx)
-
-For SSE streaming to work correctly, disable buffering:
-
+### Nginx 反向代理配置
 ```nginx
-location / {
-  proxy_pass http://localhost:3000;
-  proxy_http_version 1.1;
-  proxy_set_header Host $host;
-  proxy_set_header X-Real-IP $remote_addr;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto $scheme;
-  
-  # Critical for SSE
-  proxy_buffering off;
-  proxy_read_timeout 86400;
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        
+        # SSE 关键配置
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 120s;
+        
+        # 请求头转发
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket 支持（可选）
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
 }
 ```
 
-## 🔧 Common Issues
+### Systemd 服务配置
+```ini
+[Unit]
+Description=Reading Helper Service
+After=network.target redis.service
 
-### Redis Connection Errors
+[Service]
+Type=forking
+User=your-user
+WorkingDirectory=/path/to/reading-helper
+Environment="REDIS_URL=redis://127.0.0.1:6379"
+Environment="NODE_ENV=production"
+ExecStart=/usr/bin/pm2 start ecosystem.config.js
+ExecReload=/usr/bin/pm2 reload reading-helper
+ExecStop=/usr/bin/pm2 stop reading-helper
+Restart=on-failure
 
-**Symptom:** `缺少 REDIS_URL 环境变量` or connection timeout
+[Install]
+WantedBy=multi-user.target
+```
 
-**Solution:**
-- Ensure `REDIS_URL` environment variable is set
-- Verify Redis is running: `redis-cli ping` (should return `PONG`)
-- Check Redis connection string format: `redis://host:port` or `redis://user:pass@host:port`
+## 环境变量
 
-### CSRF Token Validation Failures
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PORT` | `3000` | 服务端口 |
+| `REDIS_URL` | — | **必需**: Redis 连接字符串 |
+| `CONFIG_DIR` | `./config` | 配置文件目录 |
+| `USER_DATA_ROOT` | `./data/users` | 用户数据根目录 |
+| `MAX_UPLOAD_BYTES` | `2097152` | 最大上传文件大小（2MB） |
+| `NODE_ENV` | — | 设为 `production` 启用生产优化 |
+| `TRUST_PROXY` | `1` | 信任代理头（Nginx 后需设置） |
+| `TURNSTILE_SECRET_KEY` | — | **必需**: Cloudflare Turnstile 密钥 |
+| `CF_TURNSTILE_SECRET_KEY` | — | Turnstile 密钥（备用环境变量名） |
 
-**Symptom:** `CSRF token 缺失/验证失败` on login or API requests
+## 常见问题
 
-**Solution:**
-- Ensure cookies are enabled in browser
-- Check reverse proxy preserves `Set-Cookie` and `Cookie` headers
-- For cross-origin requests, configure CORS properly and use `credentials: 'include'`
-- Clear browser cookies and retry
+### 1. Redis 连接失败
+**问题**: `Error: connect ECONNREFUSED 127.0.0.1:6379`
 
-### Cloudflare Turnstile Verification Failures
+**解决**:
+```bash
+# 检查 Redis 是否运行
+redis-cli ping
 
-**Symptom:** Login button remains disabled or CAPTCHA fails to load
+# 启动 Redis
+redis-server
 
-**Solution:**
-- Verify `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` environment variables are set correctly
-- Check browser console for Turnstile widget loading errors
-- Ensure Cloudflare Turnstile endpoints are accessible (not blocked by firewall)
-- Try refreshing the page to reload CAPTCHA widget
-- Verify your Turnstile keys are valid at https://dash.cloudflare.com/
-- Check server logs for CAPTCHA verification errors
+# 或使用系统服务
+sudo systemctl start redis
+```
 
-### SSE Streaming Issues
+### 2. SSE 流式响应中断
+**问题**: AI 响应在 Nginx 后被缓冲
 
-**Symptom:** AI responses not streaming or frequent disconnections
+**解决**: 确保 Nginx 配置包含:
+```nginx
+proxy_buffering off;
+proxy_cache off;
+proxy_read_timeout 120s;
+```
 
-**Solution:**
-- Disable proxy buffering in Nginx/Apache (see reverse proxy config above)
-- Increase `proxy_read_timeout` to at least 120 seconds
-- Check browser console for EventSource errors
-- Verify upstream AI API is accessible
+### 3. 会话频繁过期
+**问题**: 用户需要频繁重新登录
 
-### AI Response Errors
+**解决**: 检查 Redis 持久化配置，确保数据不会丢失:
+```bash
+# redis.conf
+save 900 1
+save 300 10
+save 60 10000
+```
 
-**Symptom:** Empty responses or parsing failures
+### 4. 文件上传失败
+**问题**: 上传大文件时返回 413 错误
 
-**Solution:**
-- Verify `api_url` points to correct endpoint:
-  - OpenAI: `https://api.openai.com/v1/chat/completions`
-  - Anthropic: `https://api.anthropic.com/v1/messages`
-- Confirm `api_key` is valid and has sufficient quota
-- Check `api_model` is supported by the provider
-- Review server logs for detailed error messages
+**解决**:
+- 调整环境变量: `MAX_UPLOAD_BYTES=5242880` (5MB)
+- Nginx 配置: `client_max_body_size 5M;`
 
-### File Upload Failures
+### 5. PM2 内存占用过高
+**问题**: 进程内存超过限制自动重启
 
-**Symptom:** Upload rejected or file not appearing in list
+**解决**: 调整 `ecosystem.config.js`:
+```javascript
+max_memory_restart: '1G',  // 增加内存限制
+instances: 2,              // 减少实例数
+```
 
-**Solution:**
-- Verify file extension is `.txt`, `.text`, or `.md`
-- Check file size is under 2MB (configurable via `MAX_UPLOAD_BYTES`)
-- Ensure `data/users/<userId>/uploads/` directory exists and is writable
-- Review filename for invalid characters (should be sanitized automatically)
+### 6. Turnstile 验证码加载失败
+**问题**: 验证码组件无法显示
 
-### Mind Map Not Rendering
+**解决**:
+- 检查 `TURNSTILE_SECRET_KEY` 环境变量是否设置
+- 确认网络可访问 `challenges.cloudflare.com`
+- 验证 Turnstile Site Key 是否正确配置在前端
+- 查看浏览器控制台错误信息
 
-**Symptom:** Mind map button does nothing or shows blank modal
+### 7. AI 请求超时
+**问题**: 长文本处理时返回 504 错误
 
-**Solution:**
-- Check browser console for CDN loading errors
-- Verify `markmap-view` and `d3` CDN URLs are accessible
-- Consider hosting these libraries locally if CDN is blocked
-- Ensure AI response contains valid Markdown format
+**解决**:
+- 增加 Nginx 超时: `proxy_read_timeout 180s;`
+- 代码中已设置 120 秒超时，可在 `server/index.js:48` 调整
 
-### Text-to-Speech Unavailable
+### 8. 孤立用户数据未清理
+**问题**: 删除用户后数据目录仍存在
 
-**Symptom:** Read aloud button disabled or not working
+**解决**: 重启服务，系统会在启动时自动清理（仅 PM2 实例 0 执行）
 
-**Solution:**
-- Use a browser with Web Speech API support (Chrome, Edge, Safari recommended)
-- Check browser permissions for speech synthesis
-- Verify page is served over HTTPS (required by some browsers)
+## 推荐服务器规格
 
-### Prompt Save Failures (403)
+### 小型部署（1-10 用户）
+- **CPU**: 2 核
+- **内存**: 2GB
+- **存储**: 20GB SSD
+- **带宽**: 5Mbps
+- **PM2 实例数**: 2
 
-**Symptom:** `userId 参数不一致` or permission denied
+**推荐配置**:
+```javascript
+// ecosystem.config.js
+instances: 2,
+max_memory_restart: '500M'
+```
 
-**Solution:**
-- Ensure `userId` in request matches session user
-- Check session hasn't expired (30-minute timeout)
-- Verify user exists in `users.config.json`
-- Clear cookies and re-login if session is corrupted
+### 中型部署（10-50 用户）
+- **CPU**: 4 核
+- **内存**: 4GB
+- **存储**: 50GB SSD
+- **带宽**: 10Mbps
+- **PM2 实例数**: 4
 
-## 📊 Recommended Server Specifications
+**推荐配置**:
+```javascript
+instances: 4,
+max_memory_restart: '800M'
+```
 
-| Scenario | vCPU | RAM | Storage | Concurrent Users |
-|----------|------|-----|---------|------------------|
-| Development/Testing | 2 | 2 GB | 20 GB | 1-5 |
-| Small Team | 4 | 4-8 GB | 40 GB | 5-20 |
-| Medium Organization | 8 | 16 GB | 80 GB | 20-50 |
+### 大型部署（50+ 用户）
+- **CPU**: 8 核
+- **内存**: 8GB+
+- **存储**: 100GB SSD
+- **带宽**: 20Mbps+
+- **PM2 实例数**: 根据 CPU 核心数
 
-**Notes:**
-- Redis should be deployed separately or use managed service for production
-- Storage requirements scale with uploaded files and conversation history
-- PM2 cluster mode scales horizontally with CPU cores
-- Consider load balancer for >50 concurrent users
+**推荐配置**:
+```javascript
+instances: 'max',  // 自动匹配 CPU 核心数
+max_memory_restart: '1G'
+```
 
-## 📜 License
+### Redis 配置建议
+- **小型**: 512MB 内存，单实例
+- **中型**: 1GB 内存，启用持久化
+- **大型**: 2GB+ 内存，主从复制 + 持久化
 
-MIT
+### 性能优化建议
+1. **启用 Redis 持久化**: 防止会话丢失
+2. **配置 Nginx 缓存**: 静态资源缓存 7 天
+3. **启用 Gzip/Brotli**: 已内置，确保 Nginx 不重复压缩
+4. **监控内存使用**: 系统每 5 分钟自动记录
+5. **日志轮转**: 使用 PM2 日志管理或 logrotate
+
+## 安全建议
+
+1. **生产环境必须**:
+   - 使用 HTTPS（Let's Encrypt 免费证书）
+   - 设置强 `sessionSecret`（`config/platform.config.json`）
+   - 定期更新依赖: `npm audit fix`
+   - 限制 Redis 访问（绑定 127.0.0.1 或使用密码）
+
+2. **用户管理**:
+   - 使用强 `accessKey`（至少 32 字符随机字符串）
+   - 定期轮换 API 密钥
+   - 不要在日志中记录敏感信息
+
+3. **防火墙规则**:
+   ```bash
+   # 仅开放必要端口
+   ufw allow 80/tcp
+   ufw allow 443/tcp
+   ufw allow 22/tcp
+   ufw enable
+   ```
+
+## 开发指南
+
+### 配置 Cloudflare Turnstile
+1. 在 [Cloudflare Dashboard](https://dash.cloudflare.com/) 创建 Turnstile 站点
+2. 获取 Site Key 和 Secret Key
+3. 在 `public/index.html` 中配置 Site Key（`data-sitekey` 属性）
+4. 设置环境变量 `TURNSTILE_SECRET_KEY`
+
+### 手动测试清单
+- [ ] 登录/登出流程（含验证码）
+- [ ] 文件上传（中文文件名 + .md 文件）
+- [ ] 文件列表和内容读取
+- [ ] 文件删除（及关联对话清理）
+- [ ] 提示词列表和保存
+- [ ] 创建/追加/清空/删除对话
+- [ ] SSE 流式响应（Chat Completions + Responses API）
+- [ ] TTS 语音朗读（不同声音和参数）
+- [ ] Redis 会话持久化（服务重启后）
+- [ ] 会话 30 分钟超时
+- [ ] 内存监控日志（每 5 分钟）
+- [ ] 慢请求日志（>1 秒）
+
+## 许可证
+
+MIT License - 详见 [LICENSE](LICENSE) 文件
+
+---
+
+**Powered by Shayne Wong** | [报告问题](https://github.com/your-repo/issues)
