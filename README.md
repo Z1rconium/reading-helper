@@ -484,4 +484,4 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 
 ---
 
-**Powered by Shayne Wong** | [报告问题](https://github.com/your-repo/issues)
+**Powered by Shayne Wong** | [报告问题](https://github.com/Z1rconium/reading-helper/issues)
