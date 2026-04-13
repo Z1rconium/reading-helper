@@ -1847,6 +1847,10 @@
                 }
                 isPlayingQueue = false;
                 audioQueue = [];
+                if (window.audioCache) {
+                    window.audioCache.forEach(url => url && URL.revokeObjectURL(url));
+                    window.audioCache.clear();
+                }
                 readAloudBtn.textContent = '朗读';
                 readAloudBtn.classList.remove('speaking');
                 return;
@@ -1880,6 +1884,7 @@
                     let sentenceIndex = 0;
                     let playIndex = 0;
                     const audioCache = new Map();
+                    window.audioCache = audioCache;
                     let activeFetches = 0;
                     let isPlaying = false;
 

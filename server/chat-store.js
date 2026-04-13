@@ -3,12 +3,16 @@ const path = require('path');
 const crypto = require('crypto');
 const sanitizeHtml = require('sanitize-html');
 const { getUserChatDir } = require('./user-paths');
+const pLimitModule = require('p-limit');
+const pLimit = typeof pLimitModule === 'function' ? pLimitModule : pLimitModule.default;
+const PQueue = require('p-queue').default;
 
 const ALLOWED_EXTENSIONS = new Set(['.txt', '.text']);
 const CHAT_STORE_VERSION = 1;
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_CONVERSATION_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 200000;
+const READ_CONCURRENCY_LIMIT = 10;
 const SANITIZE_ALLOWED_TAGS = [
   'p', 'br', 'strong', 'em', 'code', 'pre', 'blockquote',
   'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
@@ -103,12 +107,17 @@ function getConversationPath(userId, articleName, conversationId) {
 }
 
 async function ensureChatDir(userId) {
-  await fs.mkdir(getUserChatDir(userId), { recursive: true });
+  const chatDir = getUserChatDir(userId);
+  if (ensuredDirs.has(chatDir)) return;
+  await fs.mkdir(chatDir, { recursive: true });
+  ensuredDirs.add(chatDir);
 }
 
 async function ensureArticleDir(userId, articleName) {
   const articleDir = getArticleDir(userId, articleName);
+  if (ensuredDirs.has(articleDir)) return articleDir;
   await fs.mkdir(articleDir, { recursive: true });
+  ensuredDirs.add(articleDir);
   return articleDir;
 }
 
@@ -273,6 +282,12 @@ async function removeArticleDirIfEmpty(userId, articleName) {
 // #13 迁移检查优化 - 记录已迁移的文章
 const migratedArticles = new Map(); // userId -> Set<articleName>
 
+// 缓存已确认存在的目录，避免重复 mkdir
+const ensuredDirs = new Set();
+
+// 写入队列，防止并发写入导致消息丢失
+const writeQueues = new Map(); // conversationKey -> PQueue
+
 async function migrateLegacyStoreIfNeeded(userId, articleName) {
   assertValidArticleName(articleName);
   await ensureChatDir(userId);
@@ -361,9 +376,9 @@ async function listConversations(userId, articleName) {
   await migrateLegacyStoreIfNeeded(userId, articleName);
   const ids = await listConversationFiles(userId, articleName);
 
-  // 并发读取所有对话文件
+  const limit = pLimit(READ_CONCURRENCY_LIMIT);
   const conversations = await Promise.all(
-    ids.map(id => readConversation(userId, articleName, id))
+    ids.map(id => limit(() => readConversation(userId, articleName, id)))
   );
 
   sortConversationsByUpdatedAt(conversations);
@@ -417,20 +432,28 @@ async function appendConversationMessage(userId, articleName, conversationId, ro
     throw error;
   }
 
-  await migrateLegacyStoreIfNeeded(userId, articleName);
-  const conversation = await readConversation(userId, articleName, conversationId);
-  const interaction = {
-    role: normalizedRole,
-    content: normalizedRole === 'assistant'
-      ? sanitizeAssistantHtml(normalizedContent)
-      : normalizedContent,
-    timestamp: normalizeTimestamp(timestamp, new Date().toISOString())
-  };
+  const conversationKey = `${userId}:${articleName}:${conversationId}`;
+  if (!writeQueues.has(conversationKey)) {
+    writeQueues.set(conversationKey, new PQueue({ concurrency: 1 }));
+  }
+  const queue = writeQueues.get(conversationKey);
 
-  conversation.interactions.push(interaction);
-  conversation.updatedAt = new Date().toISOString();
-  await writeConversation(userId, articleName, conversation);
-  return interaction;
+  return queue.add(async () => {
+    await migrateLegacyStoreIfNeeded(userId, articleName);
+    const conversation = await readConversation(userId, articleName, conversationId);
+    const interaction = {
+      role: normalizedRole,
+      content: normalizedRole === 'assistant'
+        ? sanitizeAssistantHtml(normalizedContent)
+        : normalizedContent,
+      timestamp: normalizeTimestamp(timestamp, new Date().toISOString())
+    };
+
+    conversation.interactions.push(interaction);
+    conversation.updatedAt = new Date().toISOString();
+    await writeConversation(userId, articleName, conversation);
+    return interaction;
+  });
 }
 
 async function clearConversation(userId, articleName, conversationId) {

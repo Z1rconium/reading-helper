@@ -833,6 +833,7 @@ async function bootstrap() {
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('x-no-compression', '1');
     res.flushHeaders?.();
 
     const controller = new AbortController();
