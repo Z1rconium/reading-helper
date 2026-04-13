@@ -2394,6 +2394,19 @@
                 cursor.className = 'typing-cursor';
                 streamingDiv.appendChild(cursor);
 
+                let rafPending = false;
+                let pendingText = '';
+
+                const scheduleRender = () => {
+                    if (!rafPending) {
+                        rafPending = true;
+                        requestAnimationFrame(() => {
+                            renderAIResponse(streamingDiv, pendingText, operation, false);
+                            rafPending = false;
+                        });
+                    }
+                };
+
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
@@ -2421,7 +2434,8 @@
                             const content = extractStreamContent(data);
                             if (content) {
                                 accumulatedText += content;
-                                renderAIResponse(streamingDiv, accumulatedText, operation, false);
+                                pendingText = accumulatedText;
+                                scheduleRender();
                             }
                         }
                     }
@@ -2687,34 +2701,38 @@
             </div>`;
         }
 
+        let markmapLoadPromise = null;
+
         async function ensureMarkmapReady() {
-            const timeout = 8000;
-            const startTime = Date.now();
-            let lastState = '';
+            if (markmapLoadPromise) return markmapLoadPromise;
 
-            while (Date.now() - startTime < timeout) {
-                const hasD3 = Boolean(window.d3);
-                const markmapGlobal = window.markmap;
-                const hasMarkmap = Boolean(markmapGlobal?.Markmap);
-                const hasTransformer = Boolean(markmapGlobal?.Transformer);
-
-                if (hasD3 && hasMarkmap && hasTransformer) {
-                    // Initialize singleton Transformer instance
+            markmapLoadPromise = (async () => {
+                if (window.d3 && window.markmap?.Markmap && window.markmap?.Transformer) {
                     if (!markmapTransformer) {
-                        markmapTransformer = new markmapGlobal.Transformer();
+                        markmapTransformer = new window.markmap.Transformer();
                     }
-                    return markmapGlobal;
+                    return window.markmap;
                 }
 
-                lastState = JSON.stringify({
-                    hasD3,
-                    hasMarkmap,
-                    hasTransformer
+                const loadScript = (src) => new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = src;
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
                 });
-                await new Promise(resolve => setTimeout(resolve, 100));
-            }
 
-            throw new Error(`Markmap 资源加载超时（8秒）: ${lastState}`);
+                await loadScript('https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js');
+                await loadScript('https://cdn.jsdelivr.net/npm/markmap-lib@0.18.12/dist/browser/index.iife.js');
+                await loadScript('https://cdn.jsdelivr.net/npm/markmap-view@0.18.12/dist/browser/index.js');
+
+                if (!markmapTransformer) {
+                    markmapTransformer = new window.markmap.Transformer();
+                }
+                return window.markmap;
+            })();
+
+            return markmapLoadPromise;
         }
 
         const MINDMAP_BRANCH_COLORS = ['#5B8FF9', '#5AD8A6', '#5D7092', '#F6BD16', '#E86452', '#6DC8EC', '#945FB9', '#FF9845'];

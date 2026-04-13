@@ -414,6 +414,24 @@ async function bootstrap() {
     next();
   });
 
+  // Static files - serve before session middleware to avoid unnecessary session lookups
+  app.use(express.static(path.join(process.cwd(), 'public'), {
+    maxAge: process.env.NODE_ENV === 'production' ? '1y' : '1d',
+    etag: true,
+    lastModified: true,
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.css') || filePath.endsWith('.js')) {
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+      }
+      else if (filePath.match(/\.(jpg|jpeg|png|gif|svg|ico|webp)$/)) {
+        res.setHeader('Cache-Control', 'public, max-age=604800');
+      }
+      else if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      }
+    }
+  }));
+
   // CSP 安全策略
   app.use((req, res, next) => {
     res.setHeader(
@@ -969,27 +987,6 @@ async function bootstrap() {
       return compression.filter(req, res);
     },
     level: 6
-  }));
-
-  // Static files with optimized caching strategy
-  app.use(express.static(path.join(process.cwd(), 'public'), {
-    maxAge: process.env.NODE_ENV === 'production' ? '1y' : '1d',
-    etag: true,
-    lastModified: true,
-    setHeaders: (res, filePath) => {
-      // Cache CSS and JS files with revalidation (filenames are not fingerprinted)
-      if (filePath.endsWith('.css') || filePath.endsWith('.js')) {
-        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
-      }
-      // Cache images for 1 week
-      else if (filePath.match(/\.(jpg|jpeg|png|gif|svg|ico|webp)$/)) {
-        res.setHeader('Cache-Control', 'public, max-age=604800');
-      }
-      // HTML files: no cache (always fresh)
-      else if (filePath.endsWith('.html')) {
-        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
-      }
-    }
   }));
 
   app.listen(PORT, () => {
