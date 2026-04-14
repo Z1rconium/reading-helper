@@ -554,7 +554,7 @@ async function bootstrap() {
     return res.json({ authenticated: true, userId: user.userId, apiModel: user.provider?.api_model || null });
   });
 
-  app.get('/api/auth/status', (req, res) => {
+  app.get('/api/auth/status', ensureCsrfToken, (req, res) => {
     const authenticated = !!req.session?.authenticated && typeof req.session?.userId === 'string' && req.session.userId;
     const user = authenticated ? usersById.get(req.session.userId) : null;
     return res.json({

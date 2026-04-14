@@ -1,6 +1,6 @@
 const path = require('path');
 
-const DEFAULT_DATA_ROOT = path.join(process.cwd(), 'data', 'users');
+const DEFAULT_DATA_ROOT = path.join(__dirname, '..', 'data', 'users');
 const USER_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 function assertValidUserId(userId) {
