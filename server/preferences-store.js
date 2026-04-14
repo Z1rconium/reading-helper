@@ -2,7 +2,9 @@ const fs = require('fs/promises');
 const path = require('path');
 const { getUserDataRoot } = require('./user-paths');
 
+// 限制缓存大小防止内存泄漏
 const ensuredDirs = new Set();
+const MAX_ENSURED_DIRS = 1000;
 
 async function getPreferencesPath(userId) {
   const userDir = getUserDataRoot(userId);

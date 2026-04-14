@@ -12,8 +12,9 @@ const STAT_CONCURRENCY_LIMIT = 10;
 
 const MAX_PROMPT_NAME_LENGTH = 128;
 
-// 记录已同步过的用户，避免重复检查
+// 记录已同步过的用户，避免重复检查（限制大小防止内存泄漏）
 const syncedUsers = new Set();
+const MAX_SYNCED_USERS = 1000;
 
 function getDefaultPromptDir() {
   return path.join(getConfigDir(), 'prompts');

@@ -108,16 +108,12 @@ function getConversationPath(userId, articleName, conversationId) {
 
 async function ensureChatDir(userId) {
   const chatDir = getUserChatDir(userId);
-  if (ensuredDirs.has(chatDir)) return;
-  await fs.mkdir(chatDir, { recursive: true });
-  ensuredDirs.add(chatDir);
+  await ensureDirExists(chatDir);
 }
 
 async function ensureArticleDir(userId, articleName) {
   const articleDir = getArticleDir(userId, articleName);
-  if (ensuredDirs.has(articleDir)) return articleDir;
-  await fs.mkdir(articleDir, { recursive: true });
-  ensuredDirs.add(articleDir);
+  await ensureDirExists(articleDir);
   return articleDir;
 }
 
@@ -270,6 +266,7 @@ async function removeArticleDirIfEmpty(userId, articleName) {
     const entries = await fs.readdir(articleDir);
     if (entries.length === 0) {
       await fs.rmdir(articleDir);
+      ensuredDirs.delete(articleDir);
     }
   } catch (error) {
     if (error && (error.code === 'ENOENT' || error.code === 'ENOTEMPTY')) {
@@ -281,11 +278,50 @@ async function removeArticleDirIfEmpty(userId, articleName) {
 
 // #13 迁移检查优化 - 检查文件系统而非内存缓存（迁移是一次性的）
 
-// 缓存已确认存在的目录，避免重复 mkdir
+// 缓存已确认存在的目录，避免重复 mkdir（限制大小防止内存泄漏）
 const ensuredDirs = new Set();
+const MAX_ENSURED_DIRS = 1000;
 
-// 写入队列，防止并发写入导致消息丢失
+async function ensureDirExists(dirPath) {
+  if (ensuredDirs.has(dirPath)) {
+    try {
+      await fs.access(dirPath);
+      return;
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') {
+        throw error;
+      }
+      ensuredDirs.delete(dirPath);
+    }
+  }
+
+  await fs.mkdir(dirPath, { recursive: true });
+  if (ensuredDirs.size >= MAX_ENSURED_DIRS) {
+    ensuredDirs.clear();
+  }
+  ensuredDirs.add(dirPath);
+}
+
+// 写入队列，防止并发写入导致消息丢失（限制大小防止内存泄漏）
 const writeQueues = new Map(); // conversationKey -> PQueue
+const MAX_WRITE_QUEUES = 500;
+const QUEUE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5分钟
+
+// 定期清理空闲的写入队列
+setInterval(() => {
+  if (writeQueues.size > MAX_WRITE_QUEUES) {
+    const toDelete = [];
+    for (const [key, queue] of writeQueues.entries()) {
+      if (queue.size === 0 && queue.pending === 0) {
+        toDelete.push(key);
+      }
+    }
+    toDelete.forEach(key => writeQueues.delete(key));
+    if (toDelete.length > 0) {
+      console.log(`[Memory] 清理了 ${toDelete.length} 个空闲写入队列`);
+    }
+  }
+}, QUEUE_CLEANUP_INTERVAL);
 
 async function migrateLegacyStoreIfNeeded(userId, articleName) {
   assertValidArticleName(articleName);
@@ -487,7 +523,9 @@ async function deleteArticleChatStore(userId, articleName) {
     }
   }
 
-  await fs.rm(getArticleDir(userId, articleName), { recursive: true, force: true });
+  const articleDir = getArticleDir(userId, articleName);
+  await fs.rm(articleDir, { recursive: true, force: true });
+  ensuredDirs.delete(articleDir);
 }
 
 module.exports = {
