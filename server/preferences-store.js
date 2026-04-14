@@ -2,9 +2,14 @@ const fs = require('fs/promises');
 const path = require('path');
 const { getUserDataRoot } = require('./user-paths');
 
+const ensuredDirs = new Set();
+
 async function getPreferencesPath(userId) {
   const userDir = getUserDataRoot(userId);
-  await fs.mkdir(userDir, { recursive: true });
+  if (!ensuredDirs.has(userDir)) {
+    await fs.mkdir(userDir, { recursive: true });
+    ensuredDirs.add(userDir);
+  }
   return path.join(userDir, 'preferences.json');
 }
 

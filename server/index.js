@@ -403,10 +403,7 @@ async function bootstrap() {
       // 记录慢请求（>1秒）
       if (duration > 1000) {
         console.warn(`[Slow] ${req.method} ${req.path} ${duration}ms`);
-      }
-
-      // 记录所有 API 请求
-      if (req.path.startsWith('/api/')) {
+      } else if (process.env.NODE_ENV !== 'production' && req.path.startsWith('/api/')) {
         console.log(`[API] ${req.method} ${req.path} ${res.statusCode} ${duration}ms`);
       }
     });
@@ -978,17 +975,6 @@ async function bootstrap() {
       clearTimeout(timeout);
     }
   });
-
-  // Enable compression for all responses
-  app.use(compression({
-    filter: (req, res) => {
-      if (req.headers['x-no-compression']) {
-        return false;
-      }
-      return compression.filter(req, res);
-    },
-    level: 6
-  }));
 
   app.listen(PORT, () => {
     console.log(`Reading Helper server listening on http://localhost:${PORT}`);

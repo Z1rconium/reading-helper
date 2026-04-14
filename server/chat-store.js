@@ -279,8 +279,7 @@ async function removeArticleDirIfEmpty(userId, articleName) {
   }
 }
 
-// #13 迁移检查优化 - 记录已迁移的文章
-const migratedArticles = new Map(); // userId -> Set<articleName>
+// #13 迁移检查优化 - 检查文件系统而非内存缓存（迁移是一次性的）
 
 // 缓存已确认存在的目录，避免重复 mkdir
 const ensuredDirs = new Set();
@@ -292,16 +291,6 @@ async function migrateLegacyStoreIfNeeded(userId, articleName) {
   assertValidArticleName(articleName);
   await ensureChatDir(userId);
 
-  // 检查是否已迁移
-  if (!migratedArticles.has(userId)) {
-    migratedArticles.set(userId, new Set());
-  }
-
-  const userMigrated = migratedArticles.get(userId);
-  if (userMigrated.has(articleName)) {
-    return; // 已迁移，跳过
-  }
-
   const legacyPath = getLegacyStorePath(userId, articleName);
 
   let raw;
@@ -309,8 +298,6 @@ async function migrateLegacyStoreIfNeeded(userId, articleName) {
     raw = await fs.readFile(legacyPath, 'utf8');
   } catch (error) {
     if (error && error.code === 'ENOENT') {
-      // 标记为已检查
-      userMigrated.add(articleName);
       return;
     }
     throw error;
@@ -331,9 +318,6 @@ async function migrateLegacyStoreIfNeeded(userId, articleName) {
   }
 
   await fs.unlink(legacyPath);
-
-  // 迁移完成后标记
-  userMigrated.add(articleName);
 }
 
 function stripHtml(content) {

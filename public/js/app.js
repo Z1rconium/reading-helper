@@ -300,9 +300,13 @@
             scheduleHeartbeat();
         }
 
+        let cachedCsrfToken = null;
         function getCsrfToken() {
-            const match = document.cookie.match(/csrf_token=([^;]+)/);
-            return match ? match[1] : '';
+            if (!cachedCsrfToken) {
+                const match = document.cookie.match(/csrf_token=([^;]+)/);
+                cachedCsrfToken = match ? match[1] : '';
+            }
+            return cachedCsrfToken;
         }
 
         function hideFileContextMenu() {
@@ -1521,9 +1525,10 @@
             scheduleHeartbeat(0);
         });
 
-        document.getElementById('speech-rate').addEventListener('change', savePreferences);
-        document.getElementById('speech-volume').addEventListener('change', savePreferences);
-        document.getElementById('speech-pitch').addEventListener('change', savePreferences);
+        const debouncedSavePreferences = debounce(savePreferences, 300);
+        document.getElementById('speech-rate').addEventListener('change', debouncedSavePreferences);
+        document.getElementById('speech-volume').addEventListener('change', debouncedSavePreferences);
+        document.getElementById('speech-pitch').addEventListener('change', debouncedSavePreferences);
 
         refreshFileListBtn.addEventListener('click', async () => {
             await fetchServerFileList();
@@ -1561,20 +1566,29 @@
             }
         });
 
+        // Event delegation for file list clicks
+        fileList.addEventListener('click', async (event) => {
+            const li = event.target.closest('li');
+            if (!li || !fileList.contains(li)) return;
+            hideFileContextMenu();
+            await loadHistory(li.dataset.fileName);
+        });
+
         function updateFileList() {
             hideFileContextMenu();
-            fileList.innerHTML = '';
-
             const names = Array.from(serverFiles).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+            const currentNames = Array.from(fileList.querySelectorAll('li')).map(li => li.dataset.fileName);
 
+            if (JSON.stringify(names) === JSON.stringify(currentNames)) {
+                highlightCurrentFile();
+                return;
+            }
+
+            fileList.innerHTML = '';
             names.forEach((fileName) => {
                 const li = document.createElement('li');
                 li.textContent = fileName;
                 li.dataset.fileName = fileName;
-                li.addEventListener('click', async () => {
-                    hideFileContextMenu();
-                    await loadHistory(fileName);
-                });
                 fileList.appendChild(li);
             });
 
@@ -2280,7 +2294,9 @@
             text.textContent = String(message || '');
             messageElement.appendChild(text);
             chatMessages.appendChild(messageElement);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            requestAnimationFrame(() => {
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            });
         }
 
         // 添加用户消息
@@ -2289,7 +2305,9 @@
             messageElement.className = 'message user-message';
             messageElement.textContent = message;
             chatMessages.appendChild(messageElement);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            requestAnimationFrame(() => {
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            });
 
             // 保存互动内容
             saveInteraction('user', message).catch((error) => {
@@ -2326,7 +2344,9 @@
             }
 
             chatMessages.appendChild(messageElement);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            requestAnimationFrame(() => {
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            });
 
             // 保存互动内容
             if (message.includes('#')) {

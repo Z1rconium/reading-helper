@@ -32,7 +32,8 @@ async function createSessionStore() {
 
   return new RedisStore({
     client: redisClient,
-    prefix: process.env.REDIS_SESSION_PREFIX || 'reading-helper:sess:'
+    prefix: process.env.REDIS_SESSION_PREFIX || 'reading-helper:sess:',
+    disableTouch: true
   });
 }
 
