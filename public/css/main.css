@@ -990,6 +990,32 @@
             }
         }
 
+        .ai-stream-content {
+            min-height: 1.2em;
+        }
+
+        .ai-stream-preview {
+            margin: 0;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .ai-structured-pending {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .ai-structured-pending-title {
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .ai-structured-pending-hint {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
         .chat-input-shell {
             padding: 14px 18px 18px;
             border-top: 1px solid var(--border);

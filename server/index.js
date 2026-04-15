@@ -38,6 +38,7 @@ const { assertValidUserId } = require('./user-paths');
 const { createSessionStore } = require('./session-store');
 const { cleanupOrphanedUsers } = require('./cleanup-orphaned-users');
 const { csrfProtection, ensureCsrfToken, generateCsrfToken, setCsrfCookie } = require('./csrf-protection');
+const { closeAllChatDatabases } = require('./chat-db');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -1116,9 +1117,24 @@ async function bootstrap() {
     }
   });
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Reading Helper server listening on http://localhost:${PORT}`);
   });
+
+  let shuttingDown = false;
+  const shutdown = (signal) => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    console.log(`[Server] Received ${signal}, closing HTTP server...`);
+    closeAllChatDatabases();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 5000).unref();
+  };
+
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 
   // #14 内存监控
   setInterval(() => {

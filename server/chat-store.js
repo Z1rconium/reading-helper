@@ -1,18 +1,29 @@
-const fs = require('fs/promises');
-const path = require('path');
 const crypto = require('crypto');
+const path = require('path');
 const sanitizeHtml = require('sanitize-html');
-const { getUserChatDir } = require('./user-paths');
-const pLimitModule = require('p-limit');
-const pLimit = typeof pLimitModule === 'function' ? pLimitModule : pLimitModule.default;
-const PQueue = require('p-queue').default;
+const {
+  listConversationIds,
+  listConversationSummaries,
+  createConversationRecord,
+  insertConversationIfAbsent,
+  getConversationRecord,
+  appendConversationMessageRecord,
+  clearConversationRecord,
+  deleteConversationRecord,
+  deleteArticleConversations
+} = require('./chat-db');
+const {
+  migrateLegacyStoreIfNeeded,
+  deleteLegacyChatArtifacts
+} = require('./chat-migrate');
 
 const ALLOWED_EXTENSIONS = new Set(['.txt', '.text']);
-const CHAT_STORE_VERSION = 1;
+const DEFAULT_CONVERSATION_TITLE = '新对话';
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_CONVERSATION_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 200000;
-const READ_CONCURRENCY_LIMIT = 10;
+const MAX_TITLE_LENGTH = 24;
+const MAX_PREVIEW_LENGTH = 120;
 const SANITIZE_ALLOWED_TAGS = [
   'p', 'br', 'strong', 'em', 'code', 'pre', 'blockquote',
   'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
@@ -26,6 +37,12 @@ const SANITIZE_ALLOWED_ATTRIBUTES = {
   button: ['type', 'data-option'],
   a: ['href', 'target', 'rel']
 };
+
+function createChatStoreError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
 
 function hasAllowedTextExtension(fileName) {
   const ext = path.extname(String(fileName || '')).toLowerCase();
@@ -42,9 +59,7 @@ function isValidArticleName(fileName) {
 
 function assertValidArticleName(fileName) {
   if (!isValidArticleName(fileName)) {
-    const error = new Error('非法文件名');
-    error.code = 'INVALID_NAME';
-    throw error;
+    throw createChatStoreError('非法文件名', 'INVALID_NAME');
   }
 }
 
@@ -56,9 +71,7 @@ function isValidConversationId(conversationId) {
 
 function assertValidConversationId(conversationId) {
   if (!isValidConversationId(conversationId)) {
-    const error = new Error('非法对话 ID');
-    error.code = 'INVALID_CONVERSATION_ID';
-    throw error;
+    throw createChatStoreError('非法对话 ID', 'INVALID_CONVERSATION_ID');
   }
 }
 
@@ -79,7 +92,6 @@ function sanitizeAssistantHtml(content) {
   });
 }
 
-// #7 HTML 清理优化 - 只在写入时清理
 function sanitizeInteraction(interaction) {
   if (!interaction || typeof interaction !== 'object') return interaction;
   if (interaction.role !== 'assistant') return interaction;
@@ -90,31 +102,36 @@ function sanitizeInteraction(interaction) {
   };
 }
 
-function getArticleSafeName(articleName) {
-  return Buffer.from(articleName, 'utf8').toString('base64url');
+function stripHtml(content) {
+  return String(content || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function getLegacyStorePath(userId, articleName) {
-  return path.join(getUserChatDir(userId), `${getArticleSafeName(articleName)}.json`);
+function truncateText(content, maxLength) {
+  const plain = stripHtml(content);
+  if (!plain) {
+    return '';
+  }
+
+  return plain.length > maxLength ? `${plain.slice(0, maxLength)}...` : plain;
 }
 
-function getArticleDir(userId, articleName) {
-  return path.join(getUserChatDir(userId), getArticleSafeName(articleName));
+function buildConversationTitleFromContent(content) {
+  return truncateText(content, MAX_TITLE_LENGTH) || DEFAULT_CONVERSATION_TITLE;
 }
 
-function getConversationPath(userId, articleName, conversationId) {
-  return path.join(getArticleDir(userId, articleName), `${conversationId}.json`);
+function buildLastMessagePreview(content) {
+  return truncateText(content, MAX_PREVIEW_LENGTH);
 }
 
-async function ensureChatDir(userId) {
-  const chatDir = getUserChatDir(userId);
-  await ensureDirExists(chatDir);
-}
-
-async function ensureArticleDir(userId, articleName) {
-  const articleDir = getArticleDir(userId, articleName);
-  await ensureDirExists(articleDir);
-  return articleDir;
+function deriveConversationTitle(interactions) {
+  const firstUserInteraction = interactions.find((item) => item.role === 'user');
+  if (!firstUserInteraction) {
+    return DEFAULT_CONVERSATION_TITLE;
+  }
+  return buildConversationTitleFromContent(firstUserInteraction.content);
 }
 
 function normalizeInteraction(interaction) {
@@ -125,12 +142,9 @@ function normalizeInteraction(interaction) {
   if (!role) return null;
   if (!content.trim()) return null;
 
-  // #7 在写入时清理 HTML（仅对 assistant 角色）
-  const sanitizedContent = role === 'assistant' ? sanitizeAssistantHtml(content) : content;
-
   return {
     role,
-    content: sanitizedContent,
+    content: role === 'assistant' ? sanitizeAssistantHtml(content) : content,
     timestamp: normalizeTimestamp(interaction.timestamp, new Date().toISOString())
   };
 }
@@ -144,285 +158,75 @@ function normalizeConversation(conversation) {
   const interactions = Array.isArray(conversation.interactions)
     ? conversation.interactions.map(normalizeInteraction).filter(Boolean)
     : [];
+  const title = deriveConversationTitle(interactions);
+  const lastInteraction = interactions[interactions.length - 1];
 
   return {
     id: conversation.id,
+    title,
     createdAt,
     updatedAt,
+    messageCount: interactions.length,
+    lastMessagePreview: lastInteraction ? buildLastMessagePreview(lastInteraction.content) : '',
     interactions
   };
 }
 
-function normalizeLegacyStore(payload) {
-  const conversations = Array.isArray(payload?.conversations)
-    ? payload.conversations.map(normalizeConversation).filter(Boolean)
-    : [];
+async function migrateIfNeeded(userId, articleName) {
+  await migrateLegacyStoreIfNeeded(userId, articleName, {
+    normalizeConversation,
+    listConversationIds,
+    insertConversationIfAbsent
+  });
+}
+
+function normalizeConversationSummary(summary) {
   return {
-    version: CHAT_STORE_VERSION,
-    conversations
+    id: summary.id,
+    title: summary.title || DEFAULT_CONVERSATION_TITLE,
+    createdAt: normalizeTimestamp(summary.createdAt, new Date().toISOString()),
+    updatedAt: normalizeTimestamp(summary.updatedAt, summary.createdAt || new Date().toISOString()),
+    messageCount: Number(summary.messageCount || 0),
+    lastMessagePreview: summary.lastMessagePreview || ''
   };
-}
-
-async function writeConversation(userId, articleName, conversation) {
-  const normalized = normalizeConversation(conversation);
-  if (!normalized) {
-    const error = new Error('无效对话数据');
-    error.code = 'INVALID_CONVERSATION';
-    throw error;
-  }
-
-  await ensureChatDir(userId);
-  await ensureArticleDir(userId, articleName);
-  const targetPath = getConversationPath(userId, articleName, normalized.id);
-  const payload = {
-    version: CHAT_STORE_VERSION,
-    articleName,
-    conversation: normalized
-  };
-  await fs.writeFile(targetPath, JSON.stringify(payload, null, 2), 'utf8');
-  return normalized;
-}
-
-async function readConversation(userId, articleName, conversationId) {
-  assertValidArticleName(articleName);
-  assertValidConversationId(conversationId);
-  await ensureChatDir(userId);
-  const targetPath = getConversationPath(userId, articleName, conversationId);
-
-  let raw;
-  try {
-    raw = await fs.readFile(targetPath, 'utf8');
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      const notFound = new Error('对话不存在');
-      notFound.code = 'NOT_FOUND';
-      throw notFound;
-    }
-    throw error;
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    const malformed = new Error('对话记录文件损坏，无法解析');
-    malformed.code = 'MALFORMED_CHAT_STORE';
-    throw malformed;
-  }
-
-  const candidate = parsed?.conversation && typeof parsed.conversation === 'object'
-    ? parsed.conversation
-    : parsed;
-
-  // #7 读取时不再清理 HTML（已在写入时清理）
-  if (!candidate || typeof candidate !== 'object') {
-    const malformed = new Error('对话记录文件内容非法');
-    malformed.code = 'MALFORMED_CHAT_STORE';
-    throw malformed;
-  }
-
-  if (!isValidConversationId(candidate.id) || candidate.id !== conversationId) {
-    const malformed = new Error('对话记录文件内容非法');
-    malformed.code = 'MALFORMED_CHAT_STORE';
-    throw malformed;
-  }
-
-  const createdAt = normalizeTimestamp(candidate.createdAt, new Date().toISOString());
-  const updatedAt = normalizeTimestamp(candidate.updatedAt, createdAt);
-  const interactions = Array.isArray(candidate.interactions)
-    ? candidate.interactions.filter((item) => item && typeof item === 'object' && item.role && item.content)
-    : [];
-
-  return {
-    id: candidate.id,
-    createdAt,
-    updatedAt,
-    interactions
-  };
-}
-
-async function listConversationFiles(userId, articleName) {
-  assertValidArticleName(articleName);
-  await ensureChatDir(userId);
-  const articleDir = getArticleDir(userId, articleName);
-
-  try {
-    const entries = await fs.readdir(articleDir, { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === '.json')
-      .map((entry) => path.basename(entry.name, '.json'))
-      .filter((conversationId) => isValidConversationId(conversationId));
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      return [];
-    }
-    throw error;
-  }
-}
-
-async function removeArticleDirIfEmpty(userId, articleName) {
-  const articleDir = getArticleDir(userId, articleName);
-  try {
-    const entries = await fs.readdir(articleDir);
-    if (entries.length === 0) {
-      await fs.rmdir(articleDir);
-      ensuredDirs.delete(articleDir);
-    }
-  } catch (error) {
-    if (error && (error.code === 'ENOENT' || error.code === 'ENOTEMPTY')) {
-      return;
-    }
-    throw error;
-  }
-}
-
-// #13 迁移检查优化 - 检查文件系统而非内存缓存（迁移是一次性的）
-
-// 缓存已确认存在的目录，避免重复 mkdir（限制大小防止内存泄漏）
-const ensuredDirs = new Set();
-const MAX_ENSURED_DIRS = 1000;
-
-async function ensureDirExists(dirPath) {
-  if (ensuredDirs.has(dirPath)) {
-    try {
-      await fs.access(dirPath);
-      return;
-    } catch (error) {
-      if (!error || error.code !== 'ENOENT') {
-        throw error;
-      }
-      ensuredDirs.delete(dirPath);
-    }
-  }
-
-  await fs.mkdir(dirPath, { recursive: true });
-  if (ensuredDirs.size >= MAX_ENSURED_DIRS) {
-    ensuredDirs.clear();
-  }
-  ensuredDirs.add(dirPath);
-}
-
-// 写入队列，防止并发写入导致消息丢失（限制大小防止内存泄漏）
-const writeQueues = new Map(); // conversationKey -> PQueue
-const MAX_WRITE_QUEUES = 500;
-const QUEUE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5分钟
-
-// 定期清理空闲的写入队列
-setInterval(() => {
-  if (writeQueues.size > MAX_WRITE_QUEUES) {
-    const toDelete = [];
-    for (const [key, queue] of writeQueues.entries()) {
-      if (queue.size === 0 && queue.pending === 0) {
-        toDelete.push(key);
-      }
-    }
-    toDelete.forEach(key => writeQueues.delete(key));
-    if (toDelete.length > 0) {
-      console.log(`[Memory] 清理了 ${toDelete.length} 个空闲写入队列`);
-    }
-  }
-}, QUEUE_CLEANUP_INTERVAL);
-
-async function migrateLegacyStoreIfNeeded(userId, articleName) {
-  assertValidArticleName(articleName);
-  await ensureChatDir(userId);
-
-  const legacyPath = getLegacyStorePath(userId, articleName);
-
-  let raw;
-  try {
-    raw = await fs.readFile(legacyPath, 'utf8');
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      return;
-    }
-    throw error;
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    const malformed = new Error('历史记录迁移失败：旧文件无法解析');
-    malformed.code = 'MALFORMED_CHAT_STORE';
-    throw malformed;
-  }
-
-  const legacyStore = normalizeLegacyStore(parsed);
-  for (const conversation of legacyStore.conversations) {
-    await writeConversation(userId, articleName, conversation);
-  }
-
-  await fs.unlink(legacyPath);
-}
-
-function stripHtml(content) {
-  return String(content || '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function getConversationTitle(conversation) {
-  const firstUserInteraction = conversation.interactions.find((item) => item.role === 'user');
-  if (!firstUserInteraction) {
-    return '新对话';
-  }
-
-  const plain = stripHtml(firstUserInteraction.content);
-  if (!plain) {
-    return '新对话';
-  }
-
-  return plain.length > 24 ? `${plain.slice(0, 24)}...` : plain;
-}
-
-function toConversationSummary(conversation) {
-  return {
-    id: conversation.id,
-    title: getConversationTitle(conversation),
-    createdAt: conversation.createdAt,
-    updatedAt: conversation.updatedAt,
-    messageCount: conversation.interactions.length
-  };
-}
-
-function sortConversationsByUpdatedAt(conversations) {
-  conversations.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 }
 
 async function listConversations(userId, articleName) {
   assertValidArticleName(articleName);
-  await migrateLegacyStoreIfNeeded(userId, articleName);
-  const ids = await listConversationFiles(userId, articleName);
-
-  const limit = pLimit(READ_CONCURRENCY_LIMIT);
-  const conversations = await Promise.all(
-    ids.map(id => limit(() => readConversation(userId, articleName, id)))
-  );
-
-  sortConversationsByUpdatedAt(conversations);
-  return conversations.map(toConversationSummary);
+  await migrateIfNeeded(userId, articleName);
+  const conversations = await listConversationSummaries(userId, articleName);
+  return conversations.map(normalizeConversationSummary);
 }
 
 async function createConversation(userId, articleName) {
   assertValidArticleName(articleName);
-  await migrateLegacyStoreIfNeeded(userId, articleName);
+  await migrateIfNeeded(userId, articleName);
+
   const now = new Date().toISOString();
   const conversation = {
     id: crypto.randomUUID(),
+    title: DEFAULT_CONVERSATION_TITLE,
     createdAt: now,
     updatedAt: now,
+    messageCount: 0,
+    lastMessagePreview: '',
     interactions: []
   };
 
-  await writeConversation(userId, articleName, conversation);
-  return toConversationSummary(conversation);
+  await createConversationRecord(userId, articleName, conversation);
+  return normalizeConversationSummary(conversation);
 }
 
 async function getConversation(userId, articleName, conversationId) {
-  await migrateLegacyStoreIfNeeded(userId, articleName);
-  const conversation = await readConversation(userId, articleName, conversationId);
+  assertValidArticleName(articleName);
+  assertValidConversationId(conversationId);
+  await migrateIfNeeded(userId, articleName);
+
+  const conversation = await getConversationRecord(userId, articleName, conversationId);
+  if (!conversation) {
+    throw createChatStoreError('对话不存在', 'NOT_FOUND');
+  }
+
   return {
     id: conversation.id,
     createdAt: conversation.createdAt,
@@ -432,100 +236,87 @@ async function getConversation(userId, articleName, conversationId) {
 }
 
 async function appendConversationMessage(userId, articleName, conversationId, role, content, timestamp) {
+  assertValidArticleName(articleName);
   assertValidConversationId(conversationId);
+
   const normalizedRole = role === 'assistant' ? 'assistant' : role === 'user' ? 'user' : '';
   if (!normalizedRole) {
-    const error = new Error('role 仅支持 user 或 assistant');
-    error.code = 'INVALID_ROLE';
-    throw error;
+    throw createChatStoreError('role 仅支持 user 或 assistant', 'INVALID_ROLE');
   }
 
   const normalizedContent = typeof content === 'string' ? content : '';
   if (!normalizedContent.trim()) {
-    const error = new Error('content 不能为空');
-    error.code = 'INVALID_CONTENT';
-    throw error;
+    throw createChatStoreError('content 不能为空', 'INVALID_CONTENT');
   }
   if (normalizedContent.length > MAX_MESSAGE_LENGTH) {
-    const error = new Error('content 过长');
-    error.code = 'INVALID_CONTENT';
-    throw error;
+    throw createChatStoreError('content 过长', 'INVALID_CONTENT');
   }
 
-  const conversationKey = `${userId}:${articleName}:${conversationId}`;
-  if (!writeQueues.has(conversationKey)) {
-    writeQueues.set(conversationKey, new PQueue({ concurrency: 1 }));
+  await migrateIfNeeded(userId, articleName);
+
+  const interaction = {
+    role: normalizedRole,
+    content: normalizedRole === 'assistant'
+      ? sanitizeAssistantHtml(normalizedContent)
+      : normalizedContent,
+    timestamp: normalizeTimestamp(timestamp, new Date().toISOString())
+  };
+
+  const updatedAt = new Date().toISOString();
+  const appended = await appendConversationMessageRecord(
+    userId,
+    articleName,
+    conversationId,
+    interaction,
+    {
+      updatedAt,
+      titleCandidate: normalizedRole === 'user' ? buildConversationTitleFromContent(normalizedContent) : '',
+      lastMessagePreview: buildLastMessagePreview(interaction.content),
+      defaultTitle: DEFAULT_CONVERSATION_TITLE
+    }
+  );
+
+  if (!appended) {
+    throw createChatStoreError('对话不存在', 'NOT_FOUND');
   }
-  const queue = writeQueues.get(conversationKey);
 
-  return queue.add(async () => {
-    await migrateLegacyStoreIfNeeded(userId, articleName);
-    const conversation = await readConversation(userId, articleName, conversationId);
-    const interaction = {
-      role: normalizedRole,
-      content: normalizedRole === 'assistant'
-        ? sanitizeAssistantHtml(normalizedContent)
-        : normalizedContent,
-      timestamp: normalizeTimestamp(timestamp, new Date().toISOString())
-    };
-
-    conversation.interactions.push(interaction);
-    conversation.updatedAt = new Date().toISOString();
-    await writeConversation(userId, articleName, conversation);
-    return interaction;
-  });
+  return interaction;
 }
 
 async function clearConversation(userId, articleName, conversationId) {
-  await migrateLegacyStoreIfNeeded(userId, articleName);
-  const conversation = await readConversation(userId, articleName, conversationId);
-  conversation.interactions = [];
-  conversation.updatedAt = new Date().toISOString();
-  await writeConversation(userId, articleName, conversation);
+  assertValidArticleName(articleName);
+  assertValidConversationId(conversationId);
+  await migrateIfNeeded(userId, articleName);
 
-  return {
-    id: conversation.id,
-    updatedAt: conversation.updatedAt
-  };
+  const cleared = await clearConversationRecord(userId, articleName, conversationId, {
+    updatedAt: new Date().toISOString(),
+    defaultTitle: DEFAULT_CONVERSATION_TITLE
+  });
+
+  if (!cleared) {
+    throw createChatStoreError('对话不存在', 'NOT_FOUND');
+  }
+
+  return cleared;
 }
 
 async function deleteConversation(userId, articleName, conversationId) {
   assertValidArticleName(articleName);
   assertValidConversationId(conversationId);
-  await migrateLegacyStoreIfNeeded(userId, articleName);
-  const targetPath = getConversationPath(userId, articleName, conversationId);
+  await migrateIfNeeded(userId, articleName);
 
-  try {
-    await fs.unlink(targetPath);
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      const notFound = new Error('对话不存在');
-      notFound.code = 'NOT_FOUND';
-      throw notFound;
-    }
-    throw error;
+  const deleted = await deleteConversationRecord(userId, articleName, conversationId);
+  if (!deleted) {
+    throw createChatStoreError('对话不存在', 'NOT_FOUND');
   }
 
-  await removeArticleDirIfEmpty(userId, articleName);
   return { id: conversationId, deleted: true };
 }
 
 async function deleteArticleChatStore(userId, articleName) {
   assertValidArticleName(articleName);
-  await ensureChatDir(userId);
-
-  const legacyPath = getLegacyStorePath(userId, articleName);
-  try {
-    await fs.unlink(legacyPath);
-  } catch (error) {
-    if (!error || error.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-
-  const articleDir = getArticleDir(userId, articleName);
-  await fs.rm(articleDir, { recursive: true, force: true });
-  ensuredDirs.delete(articleDir);
+  await deleteArticleConversations(userId, articleName);
+  await deleteLegacyChatArtifacts(userId, articleName);
 }
 
 module.exports = {

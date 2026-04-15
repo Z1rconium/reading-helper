@@ -301,13 +301,9 @@
             scheduleHeartbeat();
         }
 
-        let cachedCsrfToken = null;
         function getCsrfToken() {
-            if (!cachedCsrfToken) {
-                const match = document.cookie.match(/csrf_token=([^;]+)/);
-                cachedCsrfToken = match ? match[1] : '';
-            }
-            return cachedCsrfToken;
+            const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
         }
 
         function hideFileContextMenu() {
@@ -2324,9 +2320,7 @@
             text.textContent = String(message || '');
             messageElement.appendChild(text);
             chatMessages.appendChild(messageElement);
-            requestAnimationFrame(() => {
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            });
+            scheduleChatScrollToBottom();
         }
 
         // 添加用户消息
@@ -2335,9 +2329,7 @@
             messageElement.className = 'message user-message';
             messageElement.textContent = message;
             chatMessages.appendChild(messageElement);
-            requestAnimationFrame(() => {
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            });
+            scheduleChatScrollToBottom();
 
             // 保存互动内容
             saveInteraction('user', message).catch((error) => {
@@ -2368,22 +2360,17 @@
 
             // 如果是Markdown内容，直接作为HTML插入
             if (message.includes('#')) {
-                messageElement.innerHTML = sanitizeAssistantHtml(markdownToHtml(message, null));
+                const html = buildAssistantMessageHtml(message, null);
+                messageElement.innerHTML = html;
+                saveInteraction('assistant', html).catch((error) => {
+                    addSystemMessage(`保存对话失败: ${error.message}`);
+                });
             } else {
                 messageElement.textContent = message;
             }
 
             chatMessages.appendChild(messageElement);
-            requestAnimationFrame(() => {
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            });
-
-            // 保存互动内容
-            if (message.includes('#')) {
-                saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(message, null))).catch((error) => {
-                    addSystemMessage(`保存对话失败: ${error.message}`);
-                });
-            }
+            scheduleChatScrollToBottom();
 
             return messageElement;
         }
@@ -2404,15 +2391,140 @@
             return '';
         }
 
-        function renderAIResponse(messageElement, message, operation, isFinal = false) {
-            messageElement.innerHTML = sanitizeAssistantHtml(markdownToHtml(message, operation, isFinal));
+        const STRUCTURED_STREAM_OPERATIONS = new Set(['mindmap', 'mcqs', 'tf', 'questions', 'structure']);
+        const STREAM_RENDER_THROTTLE_MS = 250;
+        let chatScrollFrame = 0;
+
+        function scheduleChatScrollToBottom() {
+            if (chatScrollFrame) return;
+            chatScrollFrame = requestAnimationFrame(() => {
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                chatScrollFrame = 0;
+            });
+        }
+
+        function isStructuredStreamOperation(operation) {
+            return STRUCTURED_STREAM_OPERATIONS.has(operation);
+        }
+
+        function getStructuredStreamLabel(operation) {
+            switch (operation) {
+                case 'mindmap':
+                    return '思维导图';
+                case 'mcqs':
+                    return '选择题';
+                case 'tf':
+                    return '判断题';
+                case 'questions':
+                    return '问答题';
+                case 'structure':
+                    return '语法树';
+                default:
+                    return '结构化内容';
+            }
+        }
+
+        function buildAssistantMessageHtml(message, operation, isFinal = false) {
+            return sanitizeAssistantHtml(markdownToHtml(message, operation, isFinal));
+        }
+
+        function ensureStreamContentHost(messageElement) {
+            const existing = messageElement.querySelector('.ai-stream-content');
+            if (existing) {
+                return existing;
+            }
+
+            const host = document.createElement('div');
+            host.className = 'ai-stream-content';
+            messageElement.appendChild(host);
+            return host;
+        }
+
+        function renderAIStreamPreview(messageElement, message, operation) {
+            const contentHost = ensureStreamContentHost(messageElement);
+
+            if (isStructuredStreamOperation(operation)) {
+                if (!contentHost.querySelector('.ai-structured-pending')) {
+                    contentHost.innerHTML = '';
+
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'ai-structured-pending';
+
+                    const title = document.createElement('div');
+                    title.className = 'ai-structured-pending-title';
+                    title.textContent = `正在生成${getStructuredStreamLabel(operation)}...`;
+
+                    const hint = document.createElement('div');
+                    hint.className = 'ai-structured-pending-hint';
+                    hint.textContent = '内容完成后会自动渲染。';
+
+                    wrapper.appendChild(title);
+                    wrapper.appendChild(hint);
+                    contentHost.appendChild(wrapper);
+                }
+            } else {
+                let preview = contentHost.querySelector('.ai-stream-preview');
+                if (!preview) {
+                    contentHost.innerHTML = '';
+                    preview = document.createElement('pre');
+                    preview.className = 'ai-stream-preview';
+                    contentHost.appendChild(preview);
+                }
+                preview.textContent = String(message || '');
+            }
+
             messageElement.classList.remove('loading');
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            scheduleChatScrollToBottom();
+        }
+
+        function renderAIResponse(messageElement, message, operation, isFinal = false) {
+            const html = buildAssistantMessageHtml(message, operation, isFinal);
+            messageElement.innerHTML = html;
+            messageElement.classList.remove('loading');
+            scheduleChatScrollToBottom();
+            return html;
         }
 
         // 调用AI API（流式输出版本）
         async function callAIApi(systemPrompt, userPrompt, loadingMessage, operation) {
             let responseElement = loadingMessage;
+            let renderTimer = 0;
+            let lastStreamRenderAt = 0;
+            let pendingText = '';
+            let structuredPreviewRendered = false;
+
+            const clearScheduledRender = () => {
+                if (!renderTimer) return;
+                clearTimeout(renderTimer);
+                renderTimer = 0;
+            };
+
+            const flushRender = (streamingDiv) => {
+                clearScheduledRender();
+                lastStreamRenderAt = Date.now();
+                if (isStructuredStreamOperation(operation)) {
+                    if (!structuredPreviewRendered) {
+                        renderAIStreamPreview(streamingDiv, pendingText, operation);
+                        structuredPreviewRendered = true;
+                    }
+                    return;
+                }
+                renderAIStreamPreview(streamingDiv, pendingText, operation);
+            };
+
+            const scheduleRender = (streamingDiv) => {
+                if (isStructuredStreamOperation(operation)) {
+                    if (!structuredPreviewRendered) {
+                        flushRender(streamingDiv);
+                    }
+                    return;
+                }
+                if (renderTimer) return;
+                const elapsed = Date.now() - lastStreamRenderAt;
+                const delay = Math.max(0, STREAM_RENDER_THROTTLE_MS - elapsed);
+                renderTimer = window.setTimeout(() => flushRender(streamingDiv), delay);
+            };
+
             try {
                 const response = await fetch('/api/ai/chat/stream', {
                     method: 'POST',
@@ -2445,22 +2557,13 @@
                 loadingMessage.replaceWith(streamingDiv);
                 responseElement = streamingDiv;
 
+                const streamContent = document.createElement('div');
+                streamContent.className = 'ai-stream-content';
+                streamingDiv.appendChild(streamContent);
+
                 const cursor = document.createElement('span');
                 cursor.className = 'typing-cursor';
                 streamingDiv.appendChild(cursor);
-
-                let rafPending = false;
-                let pendingText = '';
-
-                const scheduleRender = () => {
-                    if (!rafPending) {
-                        rafPending = true;
-                        requestAnimationFrame(() => {
-                            renderAIResponse(streamingDiv, pendingText, operation, false);
-                            rafPending = false;
-                        });
-                    }
-                };
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -2490,7 +2593,7 @@
                             if (content) {
                                 accumulatedText += content;
                                 pendingText = accumulatedText;
-                                scheduleRender();
+                                scheduleRender(streamingDiv);
                             }
                         }
                     }
@@ -2513,27 +2616,27 @@
                         const content = extractStreamContent(data);
                         if (content) {
                             accumulatedText += content;
+                            pendingText = accumulatedText;
                         }
                     }
-                    renderAIResponse(streamingDiv, accumulatedText, operation, true);
                 }
 
                 if (!accumulatedText.trim()) {
                     throw new Error('AI未返回有效内容');
                 }
 
+                clearScheduledRender();
                 const cursorElement = streamingDiv.querySelector('.typing-cursor');
                 if (cursorElement) {
                     cursorElement.remove();
                 }
 
-                renderAIResponse(streamingDiv, accumulatedText, operation, true);
-
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-                saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(accumulatedText, operation, true))).catch((error) => {
+                const finalHtml = renderAIResponse(streamingDiv, accumulatedText, operation, true);
+                saveInteraction('assistant', finalHtml).catch((error) => {
                     addSystemMessage(`保存对话失败: ${error.message}`);
                 });
             } catch (error) {
+                clearScheduledRender();
                 renderAIResponse(responseElement, `抱歉，处理请求时出错: ${error.message}`, null);
             }
         }
