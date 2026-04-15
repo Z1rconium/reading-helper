@@ -1,6 +1,6 @@
 # 📚 Reading Helper
 
-> 基于 AI 的多用户英语阅读辅助平台，支持词汇解释、句子分析、段落总结、思维导图生成等功能
+> 基于 AI 的多用户英语阅读辅助平台，支持词汇解释、句子分析、段落总结、思维导图生成、API 连通性检查等功能
 
 ## 项目概述
 
@@ -10,6 +10,7 @@ Reading Helper 是一个全栈 Web 应用，为英语学习者提供智能阅读
 - 🔐 基于 Redis 的会话认证系统
 - 👥 多用户数据完全隔离
 - 🤖 支持多种 AI 提供商（OpenAI、Anthropic、自定义 API）
+- 🩺 一键检查 AI API 连通性（错误码 + 安全文案 + 摘要）
 - 💬 对话历史持久化（每篇文章支持多个独立会话）
 - 📝 可自定义系统提示词模板
 - 🎯 CET4/CET6 词汇智能高亮
@@ -149,6 +150,8 @@ reading-helper/
 - **流式响应**: SSE (Server-Sent Events) 实时输出
 - **连接复用**: HTTP Keep-Alive 连接池（最多 10 个连接）
 - **超时控制**: 120 秒请求超时
+- **连通性检测**: 聊天区「检查连通性」按钮触发最小探测请求（`max_tokens=1, stream=false`）
+- **安全错误映射**: 返回 `errorCode + message + summary`，避免透传上游完整报错
 
 ### 4. 提示词模板系统
 - **预置模板**: 11 种场景（词汇解释、句子分析、段落总结等）
@@ -305,6 +308,41 @@ WantedBy=multi-user.target
 | `TURNSTILE_SECRET_KEY` | — | **必需**: Cloudflare Turnstile 密钥 |
 | `CF_TURNSTILE_SECRET_KEY` | — | Turnstile 密钥（备用环境变量名） |
 
+## API 接口（连通性检查）
+
+### `POST /api/ai/connectivity-check`
+- **用途**: 检查当前登录用户配置的上游 AI API 是否可达
+- **鉴权**: 需要已登录会话（`reading_helper_sid`）+ `X-CSRF-Token`
+- **请求体**: 无
+- **成功响应示例**:
+```json
+{
+  "ok": true,
+  "latencyMs": 328,
+  "status": 200
+}
+```
+- **失败响应示例**:
+```json
+{
+  "ok": false,
+  "latencyMs": 412,
+  "status": 401,
+  "errorCode": "AUTH_FAILED",
+  "message": "API Key 无效或无权限",
+  "summary": "Incorrect API key provided"
+}
+```
+
+常见 `errorCode`:
+- `AUTH_FAILED`: API Key 无效或无权限
+- `ENDPOINT_NOT_FOUND`: `api_url` 路径不存在
+- `RATE_LIMITED`: 触发上游限流
+- `UPSTREAM_UNAVAILABLE`: 上游 5xx
+- `TIMEOUT`: 10 秒探测超时
+- `NETWORK_ERROR`: 网络连接失败（如连接被拒绝/重置）
+- `DNS_ERROR`: 域名解析失败
+
 ## 常见问题
 
 ### 1. Redis 连接失败
@@ -379,6 +417,14 @@ instances: 2,              // 减少实例数
 **问题**: 删除用户后数据目录仍存在
 
 **解决**: 重启服务，系统会在启动时自动清理（仅 PM2 实例 0 执行）
+
+### 9. 连通性检查失败（AUTH_FAILED / ENDPOINT_NOT_FOUND）
+**问题**: 点击“检查连通性”后返回鉴权失败或端点不存在
+
+**解决**:
+- 检查 `config/users.config.json` 中 `provider.api_key` 是否有效
+- 检查 `provider.api_url` 是否为正确的 API 端点（含完整路径）
+- 检查 `provider.api_model` 是否被当前端点支持
 
 ## 推荐服务器规格
 
@@ -472,6 +518,7 @@ max_memory_restart: '1G'
 - [ ] 提示词列表和保存
 - [ ] 创建/追加/清空/删除对话
 - [ ] SSE 流式响应（Chat Completions + Responses API）
+- [ ] 「检查连通性」按钮（成功/超时/401/429 场景）
 - [ ] TTS 语音朗读（不同声音和参数）
 - [ ] Redis 会话持久化（服务重启后）
 - [ ] 会话 30 分钟超时
