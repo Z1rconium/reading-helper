@@ -144,6 +144,7 @@
         const loginBtn = document.getElementById('login-btn');
         const authError = document.getElementById('auth-error');
         const logoutBtn = document.getElementById('logout-btn');
+        const connectivityCheckBtn = document.getElementById('connectivity-check-btn');
         const turnstileWidget = document.getElementById('turnstile-widget');
         let turnstileToken = '';
         const serverFiles = new Set();
@@ -1271,6 +1272,35 @@
             }
         });
         logoutBtn.addEventListener('click', logout);
+
+        connectivityCheckBtn?.addEventListener('click', async () => {
+            connectivityCheckBtn.disabled = true;
+            connectivityCheckBtn.textContent = '检测中…';
+            try {
+                const response = await fetch('/api/ai/connectivity-check', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': getCsrfToken()
+                    }
+                });
+                const data = await response.json();
+                if (data.ok) {
+                    addSystemMessage(`✅ AI 连通性正常，延迟 ${data.latencyMs} ms`);
+                } else {
+                    const code = data.errorCode ? `[${data.errorCode}] ` : '';
+                    const message = data.message || data.error || '连接失败';
+                    const detail = data.summary ? `（${data.summary}）` : '';
+                    const latency = typeof data.latencyMs === 'number' ? `（${data.latencyMs} ms）` : '';
+                    addSystemMessage(`❌ AI 连通性异常${latency}：${code}${message}${detail}`);
+                }
+            } catch (error) {
+                addSystemMessage(`❌ 连通性检查失败：${error.message}`);
+            } finally {
+                connectivityCheckBtn.disabled = false;
+                connectivityCheckBtn.textContent = '检查连通性';
+            }
+        });
 
         function handleTurnstileSuccess(token) {
             turnstileToken = typeof token === 'string' ? token.trim() : '';
@@ -2497,14 +2527,10 @@
                     cursorElement.remove();
                 }
 
-                const modelMatch = accumulatedText.match(/\n\n\*模型:\s*([^*]+)\*\s*$/);
-                const modelName = modelMatch ? modelMatch[1].trim() : null;
-                const contentWithoutModel = modelName ? accumulatedText.replace(/\n\n\*模型:\s*[^*]+\*\s*$/, '') : accumulatedText;
-
-                renderAIResponse(streamingDiv, contentWithoutModel, operation, true);
+                renderAIResponse(streamingDiv, accumulatedText, operation, true);
 
                 chatMessages.scrollTop = chatMessages.scrollHeight;
-                saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(contentWithoutModel, operation, true))).catch((error) => {
+                saveInteraction('assistant', sanitizeAssistantHtml(markdownToHtml(accumulatedText, operation, true))).catch((error) => {
                     addSystemMessage(`保存对话失败: ${error.message}`);
                 });
             } catch (error) {

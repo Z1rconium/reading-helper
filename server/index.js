@@ -46,8 +46,10 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 5;
 const TRUST_PROXY_ENV = process.env.TRUST_PROXY;
 const AI_REQUEST_TIMEOUT_MS = 120000; // 120 秒超时
+const CONNECTIVITY_TIMEOUT_MS = 10000;
 const TTS_REQUEST_TIMEOUT_MS = 30000;
 const MAX_SSE_BUFFER_SIZE = 10 * 1024; // 10KB
+const MAX_CONNECTIVITY_SUMMARY_LENGTH = 120;
 const EDGE_TTS_ENDPOINT = 'https://edge-tts.shaynewong.dpdns.org/tts';
 
 // #11 AI 请求连接复用 - 创建全局 agent
@@ -261,6 +263,53 @@ function getUpstreamError(parsed) {
   }
 
   return '';
+}
+
+function toSafeSummary(text) {
+  if (typeof text !== 'string') {
+    return '';
+  }
+  const normalized = text
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized.slice(0, MAX_CONNECTIVITY_SUMMARY_LENGTH);
+}
+
+function resolveConnectivityHttpFailure(status) {
+  if (status === 400) {
+    return { errorCode: 'BAD_REQUEST', message: '上游拒绝了探测请求' };
+  }
+  if (status === 401 || status === 403) {
+    return { errorCode: 'AUTH_FAILED', message: 'API Key 无效或无权限' };
+  }
+  if (status === 404) {
+    return { errorCode: 'ENDPOINT_NOT_FOUND', message: 'API 地址无效或路径不存在' };
+  }
+  if (status === 408) {
+    return { errorCode: 'UPSTREAM_TIMEOUT', message: '上游服务响应超时' };
+  }
+  if (status === 429) {
+    return { errorCode: 'RATE_LIMITED', message: '请求过于频繁，触发上游限流' };
+  }
+  if (status >= 500) {
+    return { errorCode: 'UPSTREAM_UNAVAILABLE', message: '上游服务暂时不可用' };
+  }
+  return { errorCode: 'UPSTREAM_HTTP_ERROR', message: '上游请求失败' };
+}
+
+function resolveConnectivityNetworkFailure(error) {
+  const safeMessage = toSafeSummary(error?.message || '');
+  if (/ENOTFOUND|EAI_AGAIN/i.test(safeMessage)) {
+    return { errorCode: 'DNS_ERROR', message: '域名解析失败', summary: safeMessage };
+  }
+  if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|socket|fetch failed/i.test(safeMessage)) {
+    return { errorCode: 'NETWORK_ERROR', message: '网络连接失败', summary: safeMessage };
+  }
+  return { errorCode: 'REQUEST_FAILED', message: '连接失败', summary: safeMessage };
 }
 
 function getUpstreamDelta(parsed) {
@@ -850,7 +899,6 @@ async function bootstrap() {
       if (!upstreamResponse.ok || !upstreamResponse.body) {
         const errorText = await upstreamResponse.text();
         sendSseChunk(res, { error: errorText || `上游请求失败: ${upstreamResponse.status}` });
-        sendSseChunk(res, { delta: `\n\n*模型: ${providerConfig.api_model}*` });
         res.write('data: [DONE]\n\n');
         return res.end();
       }
@@ -883,7 +931,6 @@ async function bootstrap() {
         relayUpstreamChunk(buffer, res);
       }
 
-      sendSseChunk(res, { delta: `\n\n*模型: ${providerConfig.api_model}*` });
       res.write('data: [DONE]\n\n');
       return res.end();
     } catch (error) {
@@ -892,9 +939,102 @@ async function bootstrap() {
       } else {
         sendSseChunk(res, { error: error.message || '流式请求失败' });
       }
-      sendSseChunk(res, { delta: `\n\n*模型: ${providerConfig.api_model}*` });
       res.write('data: [DONE]\n\n');
       return res.end();
+    } finally {
+      clearTimeout(timeout);
+    }
+  });
+
+  app.post('/api/ai/connectivity-check', requireAuth, csrfProtection, async (req, res) => {
+    const user = usersById.get(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ ok: false, error: '用户会话无效，请重新登录' });
+    }
+    const providerConfig = user.provider;
+
+    // 构造最小探测请求体（max_tokens=1，不启用 stream）
+    let probeBody;
+    if (isAnthropicApi(providerConfig.api_url)) {
+      probeBody = {
+        model: providerConfig.api_model,
+        max_tokens: 1,
+        system: 'Reply with one word.',
+        messages: [{ role: 'user', content: 'Hi' }],
+        stream: false
+      };
+    } else if (isResponsesApi(providerConfig.api_url)) {
+      probeBody = {
+        model: providerConfig.api_model,
+        instructions: 'Reply with one word.',
+        input: 'Hi',
+        max_output_tokens: 1,
+        stream: false
+      };
+    } else {
+      probeBody = {
+        model: providerConfig.api_model,
+        messages: [
+          { role: 'system', content: 'Reply with one word.' },
+          { role: 'user', content: 'Hi' }
+        ],
+        max_tokens: 1,
+        stream: false
+      };
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CONNECTIVITY_TIMEOUT_MS);
+    const startTime = Date.now();
+
+    try {
+      const headers = buildUpstreamHeaders(providerConfig);
+      // 探测请求不需要 SSE
+      headers.Accept = 'application/json';
+
+      const upstreamResponse = await fetch(providerConfig.api_url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(probeBody),
+        signal: controller.signal,
+        agent: providerConfig.api_url.startsWith('https') ? httpsAgent : httpAgent
+      });
+
+      const latencyMs = Date.now() - startTime;
+
+      if (!upstreamResponse.ok) {
+        const errorText = await upstreamResponse.text().catch(() => '');
+        let summary = errorText;
+        try {
+          const parsed = JSON.parse(errorText);
+          summary = parsed?.error?.message || parsed?.error || errorText;
+        } catch (_) {}
+        const { errorCode, message } = resolveConnectivityHttpFailure(upstreamResponse.status);
+        const safeSummary = toSafeSummary(String(summary || ''));
+        return res.json({
+          ok: false,
+          latencyMs,
+          status: upstreamResponse.status,
+          errorCode,
+          message,
+          summary: safeSummary || undefined
+        });
+      }
+
+      return res.json({ ok: true, latencyMs, status: upstreamResponse.status });
+    } catch (error) {
+      const latencyMs = Date.now() - startTime;
+      if (error.name === 'AbortError') {
+        return res.json({ ok: false, latencyMs, errorCode: 'TIMEOUT', message: '连接超时（10秒）' });
+      }
+      const networkFailure = resolveConnectivityNetworkFailure(error);
+      return res.json({
+        ok: false,
+        latencyMs,
+        errorCode: networkFailure.errorCode,
+        message: networkFailure.message,
+        summary: networkFailure.summary || undefined
+      });
     } finally {
       clearTimeout(timeout);
     }
