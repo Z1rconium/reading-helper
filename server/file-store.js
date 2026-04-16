@@ -72,12 +72,8 @@ async function saveUploadedText(userId, originalName, content) {
   const filePath = path.join(uploadDir, safeName);
 
   await fs.writeFile(filePath, content, 'utf8');
-  const stat = await fs.stat(filePath);
-
   return {
-    name: safeName,
-    updatedAt: stat.mtime.toISOString(),
-    size: stat.size
+    name: safeName
   };
 }
 

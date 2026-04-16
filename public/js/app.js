@@ -224,6 +224,8 @@
         const turnstileWidget = document.getElementById('turnstile-widget');
         let turnstileToken = '';
         const serverFiles = new Set();
+        let serverFileNames = [];
+        const fileNameCollator = new Intl.Collator('zh-CN');
         const defaultTextContentHtml = '<p>请上传一个文本文件。</p><p>您可以选择单词、句子或段落，然后在右侧与AI助手交互。</p>';
         let contextMenuFileName = '';
         let contextMenuConversationId = '';
@@ -250,6 +252,45 @@
         const HEARTBEAT_BACKGROUND_MS = 10 * 60 * 1000;
         let heartbeatTimerId = 0;
         let heartbeatInFlight = false;
+
+        function clearServerFiles() {
+            serverFiles.clear();
+            serverFileNames = [];
+        }
+
+        function setServerFileNames(fileNames) {
+            clearServerFiles();
+            fileNames.forEach((fileName) => {
+                if (typeof fileName !== 'string' || !fileName.trim() || serverFiles.has(fileName)) {
+                    return;
+                }
+                serverFiles.add(fileName);
+                serverFileNames.push(fileName);
+            });
+        }
+
+        function insertServerFileName(fileName) {
+            if (typeof fileName !== 'string' || !fileName.trim() || serverFiles.has(fileName)) {
+                return;
+            }
+
+            serverFiles.add(fileName);
+            const insertIndex = serverFileNames.findIndex((currentName) => fileNameCollator.compare(currentName, fileName) > 0);
+            if (insertIndex === -1) {
+                serverFileNames.push(fileName);
+                return;
+            }
+            serverFileNames.splice(insertIndex, 0, fileName);
+        }
+
+        function removeServerFileName(fileName) {
+            if (!serverFiles.has(fileName)) {
+                return;
+            }
+
+            serverFiles.delete(fileName);
+            serverFileNames = serverFileNames.filter((name) => name !== fileName);
+        }
 
         // Utility: Debounce function
         function debounce(func, wait) {
@@ -451,7 +492,7 @@
                         showModelBadge(data.apiModel);
                     }
                 } else {
-                    serverFiles.clear();
+                    clearServerFiles();
                     updateFileList();
                     showAuthModal();
                     stopHeartbeat();
@@ -464,7 +505,7 @@
                 return authenticated;
             } catch (error) {
                 resetPromptState();
-                serverFiles.clear();
+                clearServerFiles();
                 updateFileList();
                 currentUserId = '';
                 stopHeartbeat();
@@ -547,7 +588,7 @@
             } catch (error) {
             }
 
-            serverFiles.clear();
+            clearServerFiles();
             currentUserId = '';
             currentFileName = '';
             currentFileContent = '';
@@ -580,13 +621,10 @@
                 if (!response.ok) throw new Error(`读取服务器文件列表失败: ${response.status}`);
 
                 const data = await response.json();
-                const files = Array.isArray(data.files) ? data.files : [];
-
-                serverFiles.clear();
-                files.forEach(item => {
-                    const name = typeof item === 'string' ? item : item.name;
-                    if (name) serverFiles.add(name);
-                });
+                const files = Array.isArray(data.files)
+                    ? data.files.filter((name) => typeof name === 'string' && name.trim())
+                    : [];
+                setServerFileNames(files);
             } catch (error) {
             }
         }
@@ -615,7 +653,7 @@
 
             const data = await response.json();
             if (data && data.name) {
-                serverFiles.add(data.name);
+                insertServerFileName(data.name);
             }
             return data;
         }
@@ -687,7 +725,6 @@
 
             const data = await response.json();
             return (Array.isArray(data.prompts) ? data.prompts : [])
-                .map((item) => (typeof item === 'string' ? item : item.name))
                 .filter((name) => typeof name === 'string' && name.trim());
         }
 
@@ -942,7 +979,7 @@
                 if (serverFiles.has(fileName)) {
                     await deleteServerFile(fileName);
                 }
-                serverFiles.delete(fileName);
+                removeServerFileName(fileName);
                 resetDeletedFileView(fileName);
                 if (!deletingCurrentFile) {
                     addSystemMessage(`已删除文件: ${fileName}`);
@@ -1397,7 +1434,7 @@
 
         function updateFileList() {
             hideFileContextMenu();
-            const names = Array.from(serverFiles).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+            const names = serverFileNames;
             const currentNames = Array.from(fileList.querySelectorAll('li')).map(li => li.dataset.fileName);
 
             if (JSON.stringify(names) === JSON.stringify(currentNames)) {

@@ -126,11 +126,8 @@ async function writePromptFile(userId, fileName, content) {
   }
 
   await fs.writeFile(filePath, content, 'utf8');
-  const stat = await fs.stat(filePath);
   return {
-    name: fileName,
-    updatedAt: stat.mtime.toISOString(),
-    size: stat.size
+    name: fileName
   };
 }
 
