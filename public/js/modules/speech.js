@@ -1,6 +1,382 @@
-// 朗读功能模块（懒加载）
-console.log('✅ 朗读模块已加载');
+let appRef = null;
+let speechSynthesisUtterance = null;
+let currentAudio = null;
+let isPlayingQueue = false;
+let voicesLoaded = false;
 
-// 此模块将在用户首次点击"朗读"按钮时加载
-// 可以在这里放置朗读相关的代码
-// 目前保持为占位符，实际功能仍在 app.js 中
+const ttsEndpoint = '/api/tts';
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+function setup(app) {
+  appRef = app;
+
+  if (isSafari && 'speechSynthesis' in window) {
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+  } else if (isSafari) {
+    appRef.dom.readAloudBtn.disabled = true;
+    appRef.dom.readAloudBtn.title = '您的浏览器不支持语音朗读功能';
+  }
+}
+
+function getSelectedVoiceName() {
+  return appRef.dom.voiceSelect?.value || 'en-GB-SoniaNeural';
+}
+
+function getNativeVoiceForSelection(availableVoices, edgeVoiceName) {
+  const selectionMap = {
+    'en-GB-SoniaNeural': ['Daniel', 'Samantha'],
+    'en-GB-RyanNeural': ['Daniel', 'Alex'],
+    'en-US-AriaNeural': ['Samantha', 'Ava'],
+    'en-US-GuyNeural': ['Alex', 'Aaron']
+  };
+  const preferredNames = selectionMap[edgeVoiceName] || [];
+
+  for (const preferredName of preferredNames) {
+    const matchedVoice = availableVoices.find((voice) => voice.name.includes(preferredName));
+    if (matchedVoice) {
+      return matchedVoice;
+    }
+  }
+
+  if (edgeVoiceName.startsWith('en-GB')) {
+    return availableVoices.find((voice) => voice.lang === 'en-GB')
+      || availableVoices.find((voice) => voice.lang.startsWith('en-GB'));
+  }
+
+  if (edgeVoiceName.startsWith('en-US')) {
+    return availableVoices.find((voice) => voice.lang === 'en-US')
+      || availableVoices.find((voice) => voice.lang.startsWith('en-US'));
+  }
+
+  return availableVoices.find((voice) => voice.lang.startsWith('en'));
+}
+
+function clearAudioCache() {
+  if (window.audioCache instanceof Map) {
+    window.audioCache.forEach((url) => url && URL.revokeObjectURL(url));
+    window.audioCache.clear();
+  }
+  window.audioCache = null;
+}
+
+function resetReadAloudButton() {
+  appRef.dom.readAloudBtn.textContent = '朗读';
+  appRef.dom.readAloudBtn.classList.remove('speaking');
+}
+
+async function ensureVoicesLoaded() {
+  let availableVoices = window.speechSynthesis.getVoices();
+  if (availableVoices.length > 0) {
+    return availableVoices;
+  }
+
+  await new Promise((resolve) => {
+    let attempts = 0;
+    const checkVoices = setInterval(() => {
+      availableVoices = window.speechSynthesis.getVoices();
+      attempts += 1;
+      if (availableVoices.length > 0 || attempts > 10) {
+        clearInterval(checkVoices);
+        resolve();
+      }
+    }, 100);
+  });
+
+  return window.speechSynthesis.getVoices();
+}
+
+async function speakWithNativeTts(text, options = {}) {
+  const {
+    edgeVoiceName,
+    rate,
+    volume,
+    pitch,
+    localOnly = false
+  } = options;
+
+  if (!('speechSynthesis' in window)) {
+    throw new Error('您的浏览器不支持语音朗读功能');
+  }
+
+  const availableVoices = await ensureVoicesLoaded();
+  let voicePool = availableVoices;
+
+  if (localOnly) {
+    voicePool = availableVoices.filter((voice) => voice.localService && !/google/i.test(voice.name));
+    if (voicePool.length === 0) {
+      voicePool = availableVoices.filter((voice) => voice.localService);
+    }
+    if (voicePool.length === 0) {
+      throw new Error('未找到可用的本地语音，请先在系统中安装语音包');
+    }
+  }
+
+  const selectedNativeVoice = getNativeVoiceForSelection(voicePool, edgeVoiceName)
+    || voicePool.find((voice) => voice.lang.startsWith('en') && !voice.localService)
+    || voicePool.find((voice) => voice.lang.startsWith('en') && voice.localService)
+    || voicePool.find((voice) => voice.lang.startsWith('en'))
+    || voicePool[0];
+
+  speechSynthesisUtterance = new SpeechSynthesisUtterance(text);
+  speechSynthesisUtterance.lang = 'en-US';
+  speechSynthesisUtterance.rate = rate;
+  speechSynthesisUtterance.volume = volume;
+  speechSynthesisUtterance.pitch = pitch;
+
+  if (selectedNativeVoice) {
+    speechSynthesisUtterance.voice = selectedNativeVoice;
+  }
+
+  speechSynthesisUtterance.onstart = () => {
+    appRef.dom.readAloudBtn.textContent = '停止';
+    appRef.dom.readAloudBtn.classList.add('speaking');
+  };
+
+  speechSynthesisUtterance.onend = () => {
+    resetReadAloudButton();
+  };
+
+  speechSynthesisUtterance.onerror = (event) => {
+    resetReadAloudButton();
+    if (event.error !== 'interrupted') {
+      appRef.addSystemMessage(`朗读失败: ${event.error}`);
+    }
+  };
+
+  window.speechSynthesis.speak(speechSynthesisUtterance);
+}
+
+async function requestEdgeTtsAudio(text, options = {}) {
+  const {
+    voice,
+    rate,
+    volume,
+    pitch
+  } = options;
+  const requestBody = {
+    text,
+    voice,
+    rate: `${rate >= 1 ? '+' : ''}${Math.round((rate - 1) * 100)}%`,
+    volume: `${volume >= 1 ? '+' : ''}${Math.round((volume - 1) * 100)}%`,
+    pitch: `${pitch >= 1 ? '+' : ''}${Math.round((pitch - 1) * 50)}Hz`
+  };
+
+  const response = await fetch(ttsEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': appRef.getCsrfToken()
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    let errorMessage = 'TTS服务请求失败';
+    try {
+      const errorData = await response.json();
+      errorMessage = errorData?.error || errorMessage;
+    } catch (error) {
+      const errorText = await response.text().catch(() => '');
+      errorMessage = errorText || errorMessage;
+    }
+    throw new Error(errorMessage);
+  }
+
+  const audioBlob = await response.blob();
+  return URL.createObjectURL(audioBlob);
+}
+
+async function playWithEdgeTts(text, options = {}) {
+  const {
+    voice,
+    rate,
+    volume,
+    pitch
+  } = options;
+
+  appRef.dom.readAloudBtn.textContent = '停止';
+  appRef.dom.readAloudBtn.classList.add('speaking');
+  isPlayingQueue = true;
+
+  const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
+  const maxConcurrent = 3;
+  let sentenceIndex = 1;
+  let playIndex = 0;
+  const audioCache = new Map();
+  window.audioCache = audioCache;
+  let activeFetches = 0;
+  let isPlaying = false;
+
+  const firstSentence = sentences[0]?.trim();
+  if (!firstSentence) {
+    throw new Error('没有可朗读文本');
+  }
+  const firstAudioUrl = await requestEdgeTtsAudio(firstSentence, { voice, rate, volume, pitch });
+  audioCache.set(0, firstAudioUrl);
+
+  const playNext = async () => {
+    if (!isPlayingQueue || playIndex >= sentences.length || isPlaying) {
+      if (playIndex >= sentences.length) {
+        isPlayingQueue = false;
+        clearAudioCache();
+        resetReadAloudButton();
+      }
+      return;
+    }
+
+    if (!audioCache.has(playIndex)) return;
+
+    const audioUrl = audioCache.get(playIndex);
+    playIndex += 1;
+
+    if (!audioUrl) {
+      playNext();
+      return;
+    }
+
+    isPlaying = true;
+    currentAudio = new Audio(audioUrl);
+    currentAudio.onended = () => {
+      isPlaying = false;
+      playNext();
+    };
+    currentAudio.onerror = () => {
+      isPlaying = false;
+      playNext();
+    };
+
+    try {
+      await currentAudio.play();
+    } catch (error) {
+      isPlaying = false;
+      playNext();
+    }
+  };
+
+  const fetchAudio = async (index) => {
+    if (index >= sentences.length || !isPlayingQueue) return;
+
+    activeFetches += 1;
+    try {
+      const sentenceText = sentences[index].trim();
+      if (!sentenceText) {
+        audioCache.set(index, null);
+        return;
+      }
+      const audioUrl = await requestEdgeTtsAudio(sentenceText, { voice, rate, volume, pitch });
+      audioCache.set(index, audioUrl);
+      if (index === playIndex && !isPlaying) {
+        playNext();
+      }
+    } catch (error) {
+      audioCache.set(index, null);
+      if (index === playIndex && !isPlaying) {
+        playNext();
+      }
+    } finally {
+      activeFetches -= 1;
+      if (sentenceIndex < sentences.length && activeFetches < maxConcurrent) {
+        fetchAudio(sentenceIndex++);
+      }
+    }
+  };
+
+  for (let i = 0; i < Math.min(maxConcurrent - 1, sentences.length - 1); i += 1) {
+    fetchAudio(sentenceIndex++);
+  }
+  playNext();
+}
+
+function loadVoices() {
+  if (voicesLoaded) return;
+  const voices = window.speechSynthesis.getVoices();
+  if (voices.length > 0) {
+    voicesLoaded = true;
+  }
+}
+
+function stopPlayback() {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.currentTime = 0;
+  }
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+  isPlayingQueue = false;
+  clearAudioCache();
+  resetReadAloudButton();
+}
+
+async function handleReadAloudClick() {
+  const isSpeakingNatively = 'speechSynthesis' in window && window.speechSynthesis.speaking;
+
+  if ((currentAudio && !currentAudio.paused) || isSpeakingNatively || isPlayingQueue) {
+    stopPlayback();
+    return;
+  }
+
+  const currentSelection = appRef.getCurrentSelection();
+  if (!currentSelection) {
+    appRef.addSystemMessage('请先选择要朗读的文本');
+    return;
+  }
+
+  const selectedVoice = getSelectedVoiceName();
+  const rate = parseFloat(appRef.dom.speechRateInput.value) || 0.9;
+  const volume = parseFloat(appRef.dom.speechVolumeInput.value) || 1.0;
+  const pitch = parseFloat(appRef.dom.speechPitchInput.value) || 1.0;
+
+  if (!isSafari) {
+    try {
+      await playWithEdgeTts(currentSelection, {
+        voice: selectedVoice,
+        rate,
+        volume,
+        pitch
+      });
+    } catch (error) {
+      isPlayingQueue = false;
+      clearAudioCache();
+      resetReadAloudButton();
+      try {
+        appRef.addSystemMessage('edge-tts 服务暂不可用，已自动切换到本地语音库');
+        await speakWithNativeTts(currentSelection, {
+          edgeVoiceName: selectedVoice,
+          rate,
+          volume,
+          pitch,
+          localOnly: true
+        });
+      } catch (fallbackError) {
+        resetReadAloudButton();
+        appRef.addSystemMessage(`朗读失败: ${fallbackError.message}`);
+      }
+    }
+    return;
+  }
+
+  try {
+    await speakWithNativeTts(currentSelection, {
+      edgeVoiceName: selectedVoice,
+      rate,
+      volume,
+      pitch,
+      localOnly: false
+    });
+  } catch (error) {
+    appRef.addSystemMessage(`朗读失败: ${error.message}`);
+    resetReadAloudButton();
+  }
+}
+
+function resetState() {
+  stopPlayback();
+}
+
+export {
+  setup,
+  handleReadAloudClick,
+  resetState
+};

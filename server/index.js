@@ -437,8 +437,10 @@ async function bootstrap() {
     threshold: 1024,  // 只压缩 >1KB 的响应
     level: 6,         // 压缩级别（1-9，6是平衡点）
     filter: (req, res) => {
-      // 跳过已压缩的内容类型
-      if (req.headers['x-no-compression']) return false;
+      const responseContentType = String(res.getHeader('Content-Type') || '').toLowerCase();
+      if (req.path === '/api/ai/chat/stream') return false;
+      if (req.path === '/api/tts') return false;
+      if (responseContentType.startsWith('text/event-stream')) return false;
       return compression.filter(req, res);
     }
   }));
@@ -880,7 +882,6 @@ async function bootstrap() {
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('x-no-compression', '1');
     res.flushHeaders?.();
 
     const controller = new AbortController();

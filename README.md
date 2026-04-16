@@ -1,10 +1,10 @@
 # 📚 Reading Helper
 
-> 基于 AI 的多用户英语阅读辅助平台，支持词汇解释、句子分析、段落总结、思维导图生成、API 连通性检查等功能
+> 基于 AI 的多用户英语阅读辅助平台，支持词汇解释、句子分析、段落总结、思维导图生成、题目生成、API 连通性检查等功能
 
 ## 项目概述
 
-Reading Helper 是一个全栈 Web 应用，为英语学习者提供智能阅读辅助。用户可以上传英文文章，通过 AI 对话获得词汇解释、语法分析、内容总结等帮助。系统支持多用户隔离、会话持久化、CET 词汇高亮、语音朗读等功能。
+Reading Helper 是一个全栈 Web 应用，为英语学习者提供智能阅读辅助。用户可以上传英文文章，通过 AI 对话获得词汇解释、语法分析、内容总结、思维导图和全文题目等帮助。系统支持多用户隔离、会话持久化、CET 词汇高亮、语音朗读等功能。
 
 **核心特性：**
 - 🔐 基于 Redis 的会话认证系统
@@ -16,8 +16,10 @@ Reading Helper 是一个全栈 Web 应用，为英语学习者提供智能阅读
 - 🎯 CET4/CET6 词汇智能高亮
 - 🔊 Edge TTS 语音朗读
 - 🧠 思维导图可视化（基于 D3.js + markmap）
+- 🧩 全文问答题、选择题、判断题生成与容错解析
 - 🔒 CSRF 保护 + 验证码防护（Cloudflare Turnstile）
 - ⚡ PM2 集群模式部署
+- 🚀 首页按需加载，降低首屏脚本执行开销
 
 ## 技术架构
 
@@ -32,7 +34,7 @@ Reading Helper 是一个全栈 Web 应用，为英语学习者提供智能阅读
 - **安全**: express-rate-limit, CSRF token, Cloudflare Turnstile
 
 ### 前端技术栈
-- **原生 JavaScript** (~4200 行，模块化架构)
+- **原生 JavaScript**（核心壳子 + 按需模块）
 - **CSS** (~2300 行，语义化设计)
 - **可视化**: D3.js + markmap
 - **语音**: Web Speech API + Edge TTS
@@ -92,8 +94,8 @@ reading-helper/
 │   ├── css/
 │   │   └── main.css                 # 应用样式 (~2300 行)
 │   └── js/
-│       ├── main.js                  # 入口文件
-│       ├── app.js                   # 主应用逻辑
+│       ├── main.js                  # 懒加载注册入口
+│       ├── app.js                   # 首屏核心壳子（认证/文件列表/基础聊天）
 │       ├── core/
 │       │   ├── state.js             # 状态管理
 │       │   └── dom.js               # DOM 操作
@@ -101,9 +103,12 @@ reading-helper/
 │       │   ├── api.js               # API 客户端
 │       │   └── helpers.js           # 工具函数
 │       ├── modules/
-│       │   ├── vocab.js             # CET 词汇高亮
+│       │   ├── article-renderer.js  # 文章渲染 + CET 词汇高亮
+│       │   ├── prompt-manager.js    # 提示词编辑器
 │       │   ├── speech.js            # 语音朗读
-│       │   └── mindmap.js           # 思维导图
+│       │   ├── mindmap.js           # 思维导图
+│       │   ├── quiz.js              # 题目/语法树结构化渲染
+│       │   └── vocab.js             # 旧模块占位（保留）
 │
 ├── config/                          # 配置文件
 │   ├── platform.config.json         # 平台配置（会话密钥）
@@ -144,6 +149,7 @@ reading-helper/
 - **中文文件名**: 完整支持
 - **路径安全**: 防止路径遍历攻击
 - **关联清理**: 删除文章时自动清理对话历史
+- **轻量列表接口**: 文件列表仅返回文件名数组，上传/删除后前端本地增删
 
 ### 3. AI 对话系统
 - **多提供商支持**:
@@ -153,6 +159,7 @@ reading-helper/
   - 自定义兼容端点
 - **自动检测**: 根据 `api_url` 自动选择请求格式
 - **流式响应**: SSE (Server-Sent Events) 实时输出
+- **SSE 压缩绕过**: `/api/ai/chat/stream` 与 `/api/tts` 默认跳过 `compression`，降低首 token 延迟
 - **连接复用**: HTTP Keep-Alive 连接池（最多 10 个连接）
 - **超时控制**: 120 秒请求超时
 - **连通性检测**: 聊天区「检查连通性」按钮触发最小探测请求（`max_tokens=1, stream=false`）
@@ -163,6 +170,7 @@ reading-helper/
 - **用户隔离**: 每个用户独立编辑，互不影响
 - **首次复制**: 从 `config/prompts/` 自动复制到用户目录
 - **实时保存**: 编辑后立即持久化
+- **轻量列表接口**: 提示词列表仅返回文件名数组
 
 ### 5. 对话历史管理
 - **多会话支持**: 每篇文章可创建多个独立对话
@@ -176,6 +184,9 @@ reading-helper/
 - **CET 词汇高亮**: 服务端缓存词表，前端实时标注
 - **语音朗读**: Edge TTS 流式代理（零内存缓冲）
 - **思维导图**: D3.js + markmap 可视化
+- **题目渲染**: 支持开放题、选择题、判断题和语法树展示
+- **容错恢复**: 结构化 JSON 输出不完整时尝试恢复题目数据
+- **真实懒加载**: `tts`、`mindmap`、`quiz/json-recovery`、`prompt-manager`、`article-renderer` 首次触发时才加载
 - **响应式设计**: 适配桌面和移动端
 
 ## 快速开始
@@ -235,6 +246,10 @@ npm start
 ```
 
 访问 `http://localhost:3000`
+
+说明:
+- `REDIS_URL` 为必填；未设置时服务会在启动阶段直接失败。
+- 当前 `npm start` 只启动 Node 服务，不会自动注入 Redis 或 Turnstile 环境变量。
 
 ## PM2 部署
 
@@ -377,6 +392,9 @@ proxy_buffering off;
 proxy_cache off;
 proxy_read_timeout 120s;
 ```
+
+补充:
+- 服务端已对 `/api/ai/chat/stream` 和 `/api/tts` 跳过 `compression`，避免流式内容被压缩延迟。
 
 ### 3. 会话频繁过期
 **问题**: 用户需要频繁重新登录

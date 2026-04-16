@@ -1,13 +1,9 @@
 const fs = require('fs/promises');
 const path = require('path');
-const pLimitModule = require('p-limit');
 const { getUserUploadDir } = require('./user-paths');
-
-const pLimit = typeof pLimitModule === 'function' ? pLimitModule : pLimitModule.default;
 
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
 const ALLOWED_EXTENSIONS = new Set(['.txt', '.text', '.md']);
-const STAT_CONCURRENCY_LIMIT = 10; // 限制并发 stat 调用数
 
 function hasAllowedTextExtension(fileName) {
   const ext = path.extname(String(fileName || '')).toLowerCase();
@@ -88,30 +84,10 @@ async function saveUploadedText(userId, originalName, content) {
 async function listUploadedTexts(userId) {
   const uploadDir = await ensureUploadDir(userId);
   const entries = await fs.readdir(uploadDir, { withFileTypes: true });
-
-  const limit = pLimit(STAT_CONCURRENCY_LIMIT);
-  const statTasks = [];
-
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const name = entry.name;
-    if (!isValidRequestedName(name)) continue;
-
-    statTasks.push(
-      limit(async () => {
-        const stat = await fs.stat(path.join(uploadDir, name));
-        return {
-          name,
-          updatedAt: stat.mtime.toISOString(),
-          size: stat.size
-        };
-      })
-    );
-  }
-
-  const files = await Promise.all(statTasks);
-  files.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-  return files;
+  return entries
+    .filter((entry) => entry.isFile() && isValidRequestedName(entry.name))
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
 async function readUploadedText(userId, fileName) {

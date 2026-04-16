@@ -21,6 +21,11 @@
         const chatMessages = document.getElementById('chat-messages');
         const userInput = document.getElementById('user-input');
         const sendButton = document.getElementById('send-button');
+        const readAloudBtn = document.getElementById('read-aloud-btn');
+        const voiceSelect = document.getElementById('voice-select');
+        const speechRateInput = document.getElementById('speech-rate');
+        const speechVolumeInput = document.getElementById('speech-volume');
+        const speechPitchInput = document.getElementById('speech-pitch');
         const articleContextToggle = document.getElementById('article-context-toggle');
         const clearChatBtn = document.getElementById('clear-chat-btn');
         const editPromptsBtn = document.getElementById('edit-prompts-btn');
@@ -46,9 +51,78 @@
         const closeMindmapModalBtn = document.getElementById('close-mindmap-modal');
         const mindmapModalTitle = document.getElementById('mindmap-modal-title');
         const mindmapStatus = document.getElementById('mindmap-status');
+        const mindmapToolbar = document.getElementById('mindmap-toolbar');
         const mindmapStage = document.getElementById('mindmap-stage');
+        const mindmapZoomInBtn = document.getElementById('mindmap-zoom-in');
+        const mindmapZoomOutBtn = document.getElementById('mindmap-zoom-out');
+        const mindmapFullscreenBtn = document.getElementById('mindmap-fullscreen');
 
-        chatMessages.addEventListener('click', (event) => {
+        const featureModuleLoaders = new Map();
+        const featureModules = new Map();
+        const featureModulePromises = new Map();
+        const operationRenderers = new Map();
+        const OPERATION_FEATURE_MODULES = new Map([
+            ['mindmap', 'mindmap'],
+            ['mcqs', 'quiz'],
+            ['tf', 'quiz'],
+            ['questions', 'quiz'],
+            ['structure', 'quiz']
+        ]);
+        const appApi = {};
+        window.readingHelperApp = appApi;
+
+        function registerFeatureLoader(name, loader) {
+            if (typeof name !== 'string' || !name || typeof loader !== 'function') return;
+            featureModuleLoaders.set(name, loader);
+        }
+
+        function getLoadedFeatureModule(name) {
+            return featureModules.get(name) || null;
+        }
+
+        async function loadFeatureModule(name) {
+            if (featureModules.has(name)) {
+                return featureModules.get(name);
+            }
+            if (featureModulePromises.has(name)) {
+                return featureModulePromises.get(name);
+            }
+
+            const loader = featureModuleLoaders.get(name);
+            if (typeof loader !== 'function') {
+                return null;
+            }
+
+            const loadingPromise = Promise.resolve(loader())
+                .then((loadedModule) => {
+                    if (loadedModule && typeof loadedModule.setup === 'function') {
+                        loadedModule.setup(appApi);
+                    }
+                    featureModules.set(name, loadedModule);
+                    featureModulePromises.delete(name);
+                    return loadedModule;
+                })
+                .catch((error) => {
+                    featureModulePromises.delete(name);
+                    throw error;
+                });
+
+            featureModulePromises.set(name, loadingPromise);
+            return loadingPromise;
+        }
+
+        async function ensureOperationRenderer(operation) {
+            const featureName = OPERATION_FEATURE_MODULES.get(operation);
+            if (!featureName) return null;
+            return loadFeatureModule(featureName);
+        }
+
+        function registerOperationRenderer(operation, renderer) {
+            if (typeof operation !== 'string' || !operation || typeof renderer !== 'function') return;
+            operationRenderers.set(operation, renderer);
+        }
+
+        chatMessages.addEventListener('click', async (event) => {
             const optionButton = event.target.closest('.rh-option');
             if (optionButton) {
                 const card = optionButton.closest('.rh-question-card');
@@ -90,7 +164,12 @@
             if (mindmapButton) {
                 const card = mindmapButton.closest('.rh-mindmap-card');
                 const encodedMarkdown = card?.dataset.markdown || '';
-                openMindmapModal(decodeStructuredData(encodedMarkdown));
+                try {
+                    const mindmapModule = await loadFeatureModule('mindmap');
+                    mindmapModule?.openMindmapModal?.(decodeStructuredData(encodedMarkdown));
+                } catch (error) {
+                    addSystemMessage(`加载思维导图失败: ${error.message}`);
+                }
                 return;
             }
 
@@ -128,9 +207,6 @@
         let creatingConversationPromise = null;
         let fontSize = 16; // 默认字体大小
         let currentUserId = '';
-        let isVocabAnnotationEnabled = false;
-        let cetWordLevelMap = null;
-        let cetWordListPromise = null;
 
         // 拖动调整面板宽度功能
         let isResizing = false;
@@ -151,8 +227,6 @@
         const defaultTextContentHtml = '<p>请上传一个文本文件。</p><p>您可以选择单词、句子或段落，然后在右侧与AI助手交互。</p>';
         let contextMenuFileName = '';
         let contextMenuConversationId = '';
-        let promptFileList = [];
-        let activePromptFileName = '';
         let summaryEvaluationArmed = false;
         let summaryOriginalParagraph = '';
         const promptTemplateCache = new Map();
@@ -176,10 +250,6 @@
         const HEARTBEAT_BACKGROUND_MS = 10 * 60 * 1000;
         let heartbeatTimerId = 0;
         let heartbeatInFlight = false;
-        const mindmapCache = new Map();
-        let markmapTransformer = null;
-        let currentMindmapInstance = null;
-        let currentMindmapData = null;
 
         // Utility: Debounce function
         function debounce(func, wait) {
@@ -203,42 +273,6 @@
                 hash = hash & hash;
             }
             return hash.toString(36);
-        }
-
-        // Utility: Toggle fullscreen
-        function toggleFullscreen(element) {
-            if (!document.fullscreenElement) {
-                element.requestFullscreen().catch(err => {
-                });
-            } else {
-                document.exitFullscreen();
-            }
-        }
-
-        function getMindmapZoomTransform(svgElement = null) {
-            const svg = svgElement || mindmapStage?.querySelector('svg');
-            if (!svg || !window.d3?.zoomTransform) {
-                return null;
-            }
-            return window.d3.zoomTransform(svg);
-        }
-
-        function applyMindmapZoomTransform(instance, svg, transform) {
-            if (
-                !instance ||
-                !svg ||
-                !transform ||
-                !instance.zoom ||
-                !window.d3?.select ||
-                !window.d3?.zoomIdentity
-            ) {
-                return;
-            }
-
-            const preservedTransform = window.d3.zoomIdentity
-                .translate(transform.x, transform.y)
-                .scale(transform.k);
-            window.d3.select(svg).call(instance.zoom.transform, preservedTransform);
         }
 
         function stopHeartbeat() {
@@ -356,7 +390,7 @@
             pContent = '';
             currentConversationId = '';
             creatingConversationPromise = null;
-            resetVocabAnnotationState();
+            getLoadedFeatureModule('articleRenderer')?.resetState?.();
             resetSummaryEvaluationState();
 
             fileNameDisplay.textContent = '未选择文件';
@@ -372,9 +406,7 @@
 
         function resetPromptState() {
             promptTemplateCache.clear();
-            promptFileList = [];
-            activePromptFileName = '';
-            closePromptManager();
+            getLoadedFeatureModule('promptManager')?.resetState?.();
         }
 
         function isSummaryEvaluationPrompt(promptText) {
@@ -521,7 +553,9 @@
             currentFileContent = '';
             currentConversationId = '';
             creatingConversationPromise = null;
-            resetVocabAnnotationState();
+            getLoadedFeatureModule('articleRenderer')?.resetState?.();
+            getLoadedFeatureModule('mindmap')?.resetState?.();
+            getLoadedFeatureModule('speech')?.resetState?.();
             resetSummaryEvaluationState();
             logoutBtn.title = '退出';
             resetPromptState();
@@ -652,11 +686,9 @@
             }
 
             const data = await response.json();
-            const prompts = Array.isArray(data.prompts) ? data.prompts : [];
-            promptFileList = prompts
+            return (Array.isArray(data.prompts) ? data.prompts : [])
                 .map((item) => (typeof item === 'string' ? item : item.name))
                 .filter((name) => typeof name === 'string' && name.trim());
-            return promptFileList;
         }
 
         async function fetchPromptFileContent(fileName, forceRefresh = false) {
@@ -915,7 +947,6 @@
                 if (!deletingCurrentFile) {
                     addSystemMessage(`已删除文件: ${fileName}`);
                 }
-                await fetchServerFileList();
                 updateFileList();
             } catch (error) {
                 addSystemMessage(`删除失败: ${error.message}`);
@@ -932,135 +963,33 @@
             });
         }
 
-        function buildArticleParagraphHtml(line, levelMap = null) {
-            const normalizedLine = String(line || '').trim().split(/\s+/).join(' ');
-            if (!normalizedLine) return '';
-
-            if (!(levelMap instanceof Map) || levelMap.size === 0) {
-                return `<p>${escapeHtml(normalizedLine)}</p>`;
-            }
-
-            let html = '';
-            let lastIndex = 0;
-            const wordPattern = /[A-Za-z]+/g;
-            let match = wordPattern.exec(normalizedLine);
-
-            while (match) {
-                const [word] = match;
-                const offset = match.index;
-                html += escapeHtml(normalizedLine.slice(lastIndex, offset));
-
-                const level = levelMap.get(word.toLowerCase());
-                if (level === 4 || level === 6) {
-                    html += `<span class="cet-word cet-${level}">${escapeHtml(word)}</span>`;
-                } else {
-                    html += escapeHtml(word);
-                }
-
-                lastIndex = offset + word.length;
-                match = wordPattern.exec(normalizedLine);
-            }
-
-            html += escapeHtml(normalizedLine.slice(lastIndex));
-            return `<p>${html}</p>`;
-        }
-
-        function renderArticleContent(content) {
-            const levelMap = isVocabAnnotationEnabled ? cetWordLevelMap : null;
+        function renderPlainArticleContent(content) {
             textContent.innerHTML = String(content || '')
-                .split('\n')
-                .map((line) => buildArticleParagraphHtml(line, levelMap))
+                .split('\n\n')
+                .map((paragraph) => `<p>${escapeHtml(String(paragraph || '').trim())}</p>`)
+                .filter(Boolean)
                 .join('');
         }
 
-        function parseCetWordList(content) {
-            const wordLevelMap = new Map();
-            let currentLevel = 0;
-
-            String(content || '')
-                .split(/\r?\n/)
-                .forEach((rawLine) => {
-                    const line = rawLine.trim().toLowerCase();
-                    if (!line) return;
-
-                    const levelMatch = line.match(/^([46])(.+)$/);
-                    if (levelMatch) {
-                        currentLevel = Number(levelMatch[1]);
-                        const baseWord = levelMatch[2].trim();
-                        if (baseWord) {
-                            wordLevelMap.set(baseWord, currentLevel);
-                        }
-                        return;
-                    }
-
-                    if (currentLevel === 4 || currentLevel === 6) {
-                        wordLevelMap.set(line, currentLevel);
-                    }
-                });
-
-            return wordLevelMap;
-        }
-
-        async function fetchCetWordList() {
-            if (cetWordLevelMap instanceof Map) {
-                return cetWordLevelMap;
+        async function renderArticleContent(content) {
+            try {
+                const articleRenderer = await loadFeatureModule('articleRenderer');
+                if (articleRenderer?.renderArticleContent) {
+                    articleRenderer.renderArticleContent(content);
+                    return;
+                }
+            } catch (error) {
             }
 
-            if (!cetWordListPromise) {
-                cetWordListPromise = (async () => {
-                    const response = await fetch('/api/cet-word-list', {
-                        method: 'GET',
-                        credentials: 'include'
-                    });
-
-                    if (response.status === 401) {
-                        await checkAuthStatus();
-                        throw new Error('请先登录后再读取 CET 词表');
-                    }
-                    if (!response.ok) {
-                        let data = null;
-                        try {
-                            data = await response.json();
-                        } catch (error) {
-                            data = null;
-                        }
-                        throw new Error(data?.error || `读取 CET 词表失败: ${response.status}`);
-                    }
-
-                    const data = await response.json();
-                    cetWordLevelMap = parseCetWordList(data?.content || '');
-                    return cetWordLevelMap;
-                })().catch((error) => {
-                    cetWordListPromise = null;
-                    throw error;
-                });
-            }
-
-            return cetWordListPromise;
-        }
-
-        function resetVocabAnnotationState() {
-            isVocabAnnotationEnabled = false;
-            if (moreFuncsSelect) {
-                moreFuncsSelect.value = '';
-            }
+            renderPlainArticleContent(content);
         }
 
         async function toggleVocabAnnotation() {
-            if (!currentFileContent.trim()) {
-                addSystemMessage('请先选择一篇文章。');
-                return;
+            const articleRenderer = await loadFeatureModule('articleRenderer');
+            if (!articleRenderer?.toggleVocabAnnotation) {
+                throw new Error('文章渲染模块未就绪');
             }
-
-            if (isVocabAnnotationEnabled) {
-                isVocabAnnotationEnabled = false;
-                renderArticleContent(currentFileContent);
-                return;
-            }
-
-            await fetchCetWordList();
-            isVocabAnnotationEnabled = true;
-            renderArticleContent(currentFileContent);
+            await articleRenderer.toggleVocabAnnotation();
         }
 
         function renderConversationMessages(interactions) {
@@ -1200,64 +1129,12 @@
             }
         }
 
-        function showPromptListPanel() {
-            promptListPanel.style.display = 'block';
-            promptEditorPanel.style.display = 'none';
-            activePromptFileName = '';
-        }
-
-        function showPromptEditorPanel(fileName, content) {
-            activePromptFileName = fileName;
-            promptEditorName.textContent = fileName;
-            promptEditorText.value = content;
-            promptListPanel.style.display = 'none';
-            promptEditorPanel.style.display = 'block';
-            promptEditorText.focus();
-        }
-
-        function closePromptManager() {
-            promptManagerModal.style.display = 'none';
-            showPromptListPanel();
-        }
-
-        function renderPromptList() {
-            promptListView.innerHTML = '';
-            if (!promptFileList.length) {
-                const empty = document.createElement('li');
-                empty.className = 'prompt-empty';
-                empty.textContent = '未找到提示词文件。';
-                promptListView.appendChild(empty);
-                return;
-            }
-
-            promptFileList.forEach((fileName) => {
-                const li = document.createElement('li');
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'prompt-list-item';
-                button.textContent = fileName;
-                button.addEventListener('click', async () => {
-                    try {
-                        const content = await fetchPromptFileContent(fileName, true);
-                        showPromptEditorPanel(fileName, content);
-                    } catch (error) {
-                        addSystemMessage(`读取提示词失败: ${error.message}`);
-                    }
-                });
-                li.appendChild(button);
-                promptListView.appendChild(li);
-            });
-        }
-
         async function openPromptManager() {
-            try {
-                await fetchPromptFileList();
-                renderPromptList();
-                showPromptListPanel();
-                promptManagerModal.style.display = 'flex';
-            } catch (error) {
-                addSystemMessage(`读取提示词列表失败: ${error.message}`);
+            const promptManager = await loadFeatureModule('promptManager');
+            if (!promptManager?.openPromptManager) {
+                throw new Error('提示词模块未就绪');
             }
+            await promptManager.openPromptManager();
         }
 
         loginBtn.addEventListener('click', login);
@@ -1390,26 +1267,10 @@
             chatHistoryModal.style.display = 'none';
             hideChatHistoryContextMenu();
         });
-        closePromptManagerModalBtn.addEventListener('click', () => {
-            closePromptManager();
-        });
-        closeMindmapModalBtn.addEventListener('click', () => {
-            closeMindmapModal();
-        });
         chatHistoryModal.addEventListener('click', (event) => {
             if (event.target === chatHistoryModal) {
                 chatHistoryModal.style.display = 'none';
                 hideChatHistoryContextMenu();
-            }
-        });
-        promptManagerModal.addEventListener('click', (event) => {
-            if (event.target === promptManagerModal) {
-                closePromptManager();
-            }
-        });
-        mindmapModal.addEventListener('click', (event) => {
-            if (event.target === mindmapModal) {
-                closeMindmapModal();
             }
         });
         fileHistory.addEventListener('scroll', hideFileContextMenu);
@@ -1422,77 +1283,6 @@
                 textPanel.style.flex = '';
             }
         });
-        document.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape' && mindmapModal.style.display === 'flex') {
-                closeMindmapModal();
-            }
-        });
-
-        // Mindmap toolbar controls
-        document.getElementById('mindmap-zoom-in')?.addEventListener('click', () => {
-            if (currentMindmapInstance?.rescale) {
-                const currentScale = getMindmapZoomTransform()?.k || 1;
-                currentMindmapInstance.rescale(currentScale * 1.2);
-            }
-        });
-
-        document.getElementById('mindmap-zoom-out')?.addEventListener('click', () => {
-            if (currentMindmapInstance?.rescale) {
-                const currentScale = getMindmapZoomTransform()?.k || 1;
-                currentMindmapInstance.rescale(currentScale / 1.2);
-            }
-        });
-
-        document.getElementById('mindmap-fit')?.addEventListener('click', () => {
-            if (currentMindmapInstance?.fit) {
-                currentMindmapInstance.fit();
-            }
-        });
-
-        document.getElementById('mindmap-fullscreen')?.addEventListener('click', () => {
-            toggleFullscreen(mindmapStage);
-        });
-
-        // Handle window resize for mindmap
-        const handleMindmapResize = debounce(() => {
-            if (mindmapModal.style.display === 'flex' && currentMindmapInstance) {
-                // Resize SVG while preserving the current zoom/pan transform.
-                const containerWidth = mindmapStage.clientWidth;
-                const containerHeight = mindmapStage.clientHeight;
-                const svg = mindmapStage.querySelector('svg');
-
-                if (svg) {
-                    const previousTransform = getMindmapZoomTransform();
-                    const width = Math.max(containerWidth - 24, 600);
-                    const height = Math.max(containerHeight - 24, 400);
-                    svg.setAttribute('width', String(width));
-                    svg.setAttribute('height', String(height));
-
-                    if (
-                        previousTransform &&
-                        currentMindmapInstance.zoom &&
-                        window.d3?.select &&
-                        window.d3?.zoomIdentity
-                    ) {
-                        const preservedTransform = window.d3.zoomIdentity
-                            .translate(previousTransform.x, previousTransform.y)
-                            .scale(previousTransform.k);
-                        window.d3.select(svg).call(currentMindmapInstance.zoom.transform, preservedTransform);
-                    }
-                }
-            }
-        }, 300);
-
-        window.addEventListener('resize', handleMindmapResize);
-
-        // Handle fullscreen change
-        document.addEventListener('fullscreenchange', () => {
-            if (document.fullscreenElement === mindmapStage) {
-                mindmapStage.classList.add('fullscreen');
-            } else {
-                mindmapStage.classList.remove('fullscreen');
-            }
-        });
 
         async function loadPreferences() {
             if (!currentUserId) return;
@@ -1503,9 +1293,9 @@
                 });
                 if (response.ok) {
                     const prefs = await response.json();
-                    document.getElementById('speech-rate').value = prefs.speechRate || 0.9;
-                    document.getElementById('speech-volume').value = prefs.speechVolume || 1.0;
-                    document.getElementById('speech-pitch').value = prefs.speechPitch || 1.0;
+                    speechRateInput.value = prefs.speechRate || 0.9;
+                    speechVolumeInput.value = prefs.speechVolume || 1.0;
+                    speechPitchInput.value = prefs.speechPitch || 1.0;
                 }
             } catch (error) {}
         }
@@ -1514,9 +1304,9 @@
             if (!currentUserId) return;
             try {
                 const prefs = {
-                    speechRate: parseFloat(document.getElementById('speech-rate').value) || 0.9,
-                    speechVolume: parseFloat(document.getElementById('speech-volume').value) || 1.0,
-                    speechPitch: parseFloat(document.getElementById('speech-pitch').value) || 1.0
+                    speechRate: parseFloat(speechRateInput.value) || 0.9,
+                    speechVolume: parseFloat(speechVolumeInput.value) || 1.0,
+                    speechPitch: parseFloat(speechPitchInput.value) || 1.0
                 };
                 await fetch('/api/preferences', {
                     method: 'PUT',
@@ -1552,9 +1342,9 @@
         });
 
         const debouncedSavePreferences = debounce(savePreferences, 300);
-        document.getElementById('speech-rate').addEventListener('change', debouncedSavePreferences);
-        document.getElementById('speech-volume').addEventListener('change', debouncedSavePreferences);
-        document.getElementById('speech-pitch').addEventListener('change', debouncedSavePreferences);
+        speechRateInput.addEventListener('change', debouncedSavePreferences);
+        speechVolumeInput.addEventListener('change', debouncedSavePreferences);
+        speechPitchInput.addEventListener('change', debouncedSavePreferences);
 
         refreshFileListBtn.addEventListener('click', async () => {
             await fetchServerFileList();
@@ -1565,7 +1355,11 @@
             clearChatHistory();
         });
         editPromptsBtn.addEventListener('click', async () => {
-            await openPromptManager();
+            try {
+                await openPromptManager();
+            } catch (error) {
+                addSystemMessage(`打开提示词编辑器失败: ${error.message}`);
+            }
         });
         historyChatBtn.addEventListener('click', async () => {
             await openChatHistory();
@@ -1576,19 +1370,6 @@
         articleContextToggle.addEventListener('change', () => {
             if (!isArticleContextEnabled()) {
                 resetSummaryEvaluationState();
-            }
-        });
-        promptEditorBackBtn.addEventListener('click', () => {
-            showPromptListPanel();
-        });
-        promptEditorSaveBtn.addEventListener('click', async () => {
-            if (!activePromptFileName) return;
-            const nextContent = promptEditorText.value;
-            try {
-                await savePromptFileContent(activePromptFileName, nextContent);
-                addSystemMessage(`已保存提示词: ${activePromptFileName}`);
-            } catch (error) {
-                addSystemMessage(`保存提示词失败: ${error.message}`);
             }
         });
 
@@ -1625,14 +1406,14 @@
             currentFileName = fileName;
             currentConversationId = '';
             creatingConversationPromise = null;
-            resetVocabAnnotationState();
+            getLoadedFeatureModule('articleRenderer')?.resetState?.();
             resetSummaryEvaluationState();
 
             try {
                 const content = await fetchServerFileContent(currentFileName);
                 fileNameDisplay.textContent = currentFileName;
                 currentFileContent = content;
-                renderArticleContent(content);
+                await renderArticleContent(content);
                 startNewConversation();
                 highlightCurrentFile();
             } catch (error) {
@@ -1647,7 +1428,6 @@
 
             try {
                 const saved = await uploadFileToServer(file);
-                await fetchServerFileList();
                 updateFileList();
                 await loadHistory(saved?.name || file.name);
             } catch (error) {
@@ -1738,6 +1518,7 @@
         });
 
         async function callFeaturePrompt(fileName, variables, userPrompt, loadingText, operation, forceRefresh = false) {
+            await ensureOperationRenderer(operation);
             const systemPrompt = await buildSystemPrompt(fileName, variables, forceRefresh);
             if (!systemPrompt) {
                 throw new Error(`提示词为空: ${fileName}`);
@@ -1812,376 +1593,15 @@
             }
         });
 
-        // 朗读功能
-        let speechSynthesisUtterance = null;
-        let currentAudio = null;
-        let audioQueue = [];
-        let isPlayingQueue = false;
-        const readAloudBtn = document.getElementById('read-aloud-btn');
-        const voiceSelect = document.getElementById('voice-select');
-        const ttsEndpoint = '/api/tts';
-        const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-
-        function getSelectedVoiceName() {
-            return voiceSelect?.value || 'en-GB-SoniaNeural';
-        }
-
-        function getNativeVoiceForSelection(availableVoices, edgeVoiceName) {
-            const selectionMap = {
-                'en-GB-SoniaNeural': ['Daniel', 'Samantha'],
-                'en-GB-RyanNeural': ['Daniel', 'Alex'],
-                'en-US-AriaNeural': ['Samantha', 'Ava'],
-                'en-US-GuyNeural': ['Alex', 'Aaron']
-            };
-            const preferredNames = selectionMap[edgeVoiceName] || [];
-
-            for (const preferredName of preferredNames) {
-                const matchedVoice = availableVoices.find((voice) => voice.name.includes(preferredName));
-                if (matchedVoice) {
-                    return matchedVoice;
-                }
-            }
-
-            if (edgeVoiceName.startsWith('en-GB')) {
-                return availableVoices.find((voice) => voice.lang === 'en-GB')
-                    || availableVoices.find((voice) => voice.lang.startsWith('en-GB'));
-            }
-
-            if (edgeVoiceName.startsWith('en-US')) {
-                return availableVoices.find((voice) => voice.lang === 'en-US')
-                    || availableVoices.find((voice) => voice.lang.startsWith('en-US'));
-            }
-
-            return availableVoices.find((voice) => voice.lang.startsWith('en'));
-        }
-
-        function clearAudioCache() {
-            if (window.audioCache instanceof Map) {
-                window.audioCache.forEach((url) => url && URL.revokeObjectURL(url));
-                window.audioCache.clear();
-            }
-            window.audioCache = null;
-        }
-
-        function resetReadAloudButton() {
-            readAloudBtn.textContent = '朗读';
-            readAloudBtn.classList.remove('speaking');
-        }
-
-        async function ensureVoicesLoaded() {
-            let availableVoices = window.speechSynthesis.getVoices();
-            if (availableVoices.length > 0) {
-                return availableVoices;
-            }
-
-            await new Promise((resolve) => {
-                let attempts = 0;
-                const checkVoices = setInterval(() => {
-                    availableVoices = window.speechSynthesis.getVoices();
-                    attempts++;
-                    if (availableVoices.length > 0 || attempts > 10) {
-                        clearInterval(checkVoices);
-                        resolve();
-                    }
-                }, 100);
-            });
-
-            return window.speechSynthesis.getVoices();
-        }
-
-        async function speakWithNativeTts(text, options = {}) {
-            const {
-                edgeVoiceName,
-                rate,
-                volume,
-                pitch,
-                localOnly = false
-            } = options;
-
-            if (!('speechSynthesis' in window)) {
-                throw new Error('您的浏览器不支持语音朗读功能');
-            }
-
-            const availableVoices = await ensureVoicesLoaded();
-            let voicePool = availableVoices;
-
-            if (localOnly) {
-                voicePool = availableVoices.filter((voice) => voice.localService && !/google/i.test(voice.name));
-                if (voicePool.length === 0) {
-                    voicePool = availableVoices.filter((voice) => voice.localService);
-                }
-                if (voicePool.length === 0) {
-                    throw new Error('未找到可用的本地语音，请先在系统中安装语音包');
-                }
-            }
-
-            const selectedNativeVoice = getNativeVoiceForSelection(voicePool, edgeVoiceName)
-                || voicePool.find((voice) => voice.lang.startsWith('en') && !voice.localService)
-                || voicePool.find((voice) => voice.lang.startsWith('en') && voice.localService)
-                || voicePool.find((voice) => voice.lang.startsWith('en'))
-                || voicePool[0];
-
-            speechSynthesisUtterance = new SpeechSynthesisUtterance(text);
-            speechSynthesisUtterance.lang = 'en-US';
-            speechSynthesisUtterance.rate = rate;
-            speechSynthesisUtterance.volume = volume;
-            speechSynthesisUtterance.pitch = pitch;
-
-            if (selectedNativeVoice) {
-                speechSynthesisUtterance.voice = selectedNativeVoice;
-            }
-
-            speechSynthesisUtterance.onstart = () => {
-                readAloudBtn.textContent = '停止';
-                readAloudBtn.classList.add('speaking');
-            };
-
-            speechSynthesisUtterance.onend = () => {
-                resetReadAloudButton();
-            };
-
-            speechSynthesisUtterance.onerror = (event) => {
-                resetReadAloudButton();
-                if (event.error !== 'interrupted') {
-                    addSystemMessage(`朗读失败: ${event.error}`);
-                }
-            };
-
-            window.speechSynthesis.speak(speechSynthesisUtterance);
-        }
-
-        async function requestEdgeTtsAudio(text, options = {}) {
-            const {
-                voice,
-                rate,
-                volume,
-                pitch
-            } = options;
-            const requestBody = {
-                text,
-                voice,
-                rate: `${rate >= 1 ? '+' : ''}${Math.round((rate - 1) * 100)}%`,
-                volume: `${volume >= 1 ? '+' : ''}${Math.round((volume - 1) * 100)}%`,
-                pitch: `${pitch >= 1 ? '+' : ''}${Math.round((pitch - 1) * 50)}Hz`
-            };
-
-            const response = await fetch(ttsEndpoint, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': getCsrfToken()
-                },
-                body: JSON.stringify(requestBody)
-            });
-
-            if (!response.ok) {
-                let errorMessage = 'TTS服务请求失败';
-                try {
-                    const errorData = await response.json();
-                    errorMessage = errorData?.error || errorMessage;
-                } catch (_) {
-                    const errorText = await response.text().catch(() => '');
-                    errorMessage = errorText || errorMessage;
-                }
-                throw new Error(errorMessage);
-            }
-
-            const audioBlob = await response.blob();
-            return URL.createObjectURL(audioBlob);
-        }
-
-        async function playWithEdgeTts(text, options = {}) {
-            const {
-                voice,
-                rate,
-                volume,
-                pitch
-            } = options;
-
-            readAloudBtn.textContent = '停止';
-            readAloudBtn.classList.add('speaking');
-            isPlayingQueue = true;
-
-            const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
-            const MAX_CONCURRENT = 3;
-            let sentenceIndex = 1;
-            let playIndex = 0;
-            const audioCache = new Map();
-            window.audioCache = audioCache;
-            let activeFetches = 0;
-            let isPlaying = false;
-
-            const firstSentence = sentences[0]?.trim();
-            if (!firstSentence) {
-                throw new Error('没有可朗读文本');
-            }
-            const firstAudioUrl = await requestEdgeTtsAudio(firstSentence, { voice, rate, volume, pitch });
-            audioCache.set(0, firstAudioUrl);
-
-            const fetchAudio = async (index) => {
-                if (index >= sentences.length || !isPlayingQueue) return;
-
-                activeFetches++;
-                try {
-                    const sentenceText = sentences[index].trim();
-                    if (!sentenceText) {
-                        audioCache.set(index, null);
-                        return;
-                    }
-                    const audioUrl = await requestEdgeTtsAudio(sentenceText, { voice, rate, volume, pitch });
-                    audioCache.set(index, audioUrl);
-                    if (index === playIndex && !isPlaying) {
-                        playNext();
-                    }
-                } catch (_) {
-                    audioCache.set(index, null);
-                    if (index === playIndex && !isPlaying) {
-                        playNext();
-                    }
-                } finally {
-                    activeFetches--;
-                    if (sentenceIndex < sentences.length && activeFetches < MAX_CONCURRENT) {
-                        fetchAudio(sentenceIndex++);
-                    }
-                }
-            };
-
-            const playNext = async () => {
-                if (!isPlayingQueue || playIndex >= sentences.length || isPlaying) {
-                    if (playIndex >= sentences.length) {
-                        isPlayingQueue = false;
-                        clearAudioCache();
-                        resetReadAloudButton();
-                    }
-                    return;
-                }
-
-                if (!audioCache.has(playIndex)) return;
-
-                const audioUrl = audioCache.get(playIndex);
-                playIndex++;
-
-                if (!audioUrl) {
-                    playNext();
-                    return;
-                }
-
-                isPlaying = true;
-                currentAudio = new Audio(audioUrl);
-                currentAudio.onended = () => {
-                    isPlaying = false;
-                    playNext();
-                };
-                currentAudio.onerror = () => {
-                    isPlaying = false;
-                    playNext();
-                };
-                try {
-                    await currentAudio.play();
-                } catch (_) {
-                    isPlaying = false;
-                    playNext();
-                }
-            };
-
-            for (let i = 0; i < Math.min(MAX_CONCURRENT - 1, sentences.length - 1); i++) {
-                fetchAudio(sentenceIndex++);
-            }
-            playNext();
-        }
-
-        // 初始化语音列表（Safari 需要）
-        let voicesLoaded = false;
-        function loadVoices() {
-            if (voicesLoaded) return;
-            const voices = window.speechSynthesis.getVoices();
-            if (voices.length > 0) {
-                voicesLoaded = true;
-            }
-        }
-
-        if (isSafari && 'speechSynthesis' in window) {
-            loadVoices();
-            window.speechSynthesis.onvoiceschanged = loadVoices;
-        } else if (isSafari) {
-            readAloudBtn.disabled = true;
-            readAloudBtn.title = '您的浏览器不支持语音朗读功能';
-        }
-
         readAloudBtn.addEventListener('click', async function () {
-            const isSpeakingNatively = 'speechSynthesis' in window && window.speechSynthesis.speaking;
-
-            // 如果正在朗读，则停止
-            if ((currentAudio && !currentAudio.paused) || isSpeakingNatively || isPlayingQueue) {
-                if (currentAudio) {
-                    currentAudio.pause();
-                    currentAudio.currentTime = 0;
+            try {
+                const speechModule = await loadFeatureModule('speech');
+                if (!speechModule?.handleReadAloudClick) {
+                    throw new Error('朗读模块未就绪');
                 }
-                if ('speechSynthesis' in window) {
-                    window.speechSynthesis.cancel();
-                }
-                isPlayingQueue = false;
-                audioQueue = [];
-                clearAudioCache();
-                resetReadAloudButton();
-                return;
-            }
-
-            // 检查是否有选中文本
-            if (!currentSelection) {
-                addSystemMessage('请先选择要朗读的文本');
-                return;
-            }
-
-            const rateInput = document.getElementById('speech-rate');
-            const volumeInput = document.getElementById('speech-volume');
-            const pitchInput = document.getElementById('speech-pitch');
-            const selectedVoice = getSelectedVoiceName();
-            const rate = parseFloat(rateInput.value) || 0.9;
-            const volume = parseFloat(volumeInput.value) || 1.0;
-            const pitch = parseFloat(pitchInput.value) || 1.0;
-
-            if (!isSafari) {
-                // 非 Safari 浏览器优先使用 edge-tts，失败时回退到本地语音库
-                try {
-                    await playWithEdgeTts(currentSelection, {
-                        voice: selectedVoice,
-                        rate,
-                        volume,
-                        pitch
-                    });
-                } catch (_) {
-                    isPlayingQueue = false;
-                    clearAudioCache();
-                    resetReadAloudButton();
-                    try {
-                        addSystemMessage('edge-tts 服务暂不可用，已自动切换到本地语音库');
-                        await speakWithNativeTts(currentSelection, {
-                            edgeVoiceName: selectedVoice,
-                            rate,
-                            volume,
-                            pitch,
-                            localOnly: true
-                        });
-                    } catch (fallbackError) {
-                        resetReadAloudButton();
-                        addSystemMessage(`朗读失败: ${fallbackError.message}`);
-                    }
-                }
-            } else {
-                // Safari 使用原生 speechSynthesis
-                try {
-                    await speakWithNativeTts(currentSelection, {
-                        edgeVoiceName: selectedVoice,
-                        rate,
-                        volume,
-                        pitch,
-                        localOnly: false
-                    });
-                } catch (error) {
-                    addSystemMessage(`朗读失败: ${error.message}`);
-                    resetReadAloudButton();
-                }
+                await speechModule.handleReadAloudClick();
+            } catch (error) {
+                addSystemMessage(`朗读失败: ${error.message}`);
             }
         });
 
@@ -2828,1247 +2248,6 @@
             }
         }
 
-        function getMindmapMarkdown(markdown) {
-            return extractFencedBlock(markdown, 'markdown') || String(markdown || '').trim();
-        }
-
-        function getMindmapRootLabel() {
-            const rawName = String(currentFileName || '').trim();
-            if (!rawName) return 'Article Mindmap';
-            return rawName.replace(/\.[^.]+$/, '') || rawName;
-        }
-
-        function normalizeMindmapLabel(text) {
-            const patterns = [
-                [/\[([^\]]+)\]\(([^)]+)\)/g, '$1'],  // Links
-                [/!\[([^\]]*)\]\(([^)]+)\)/g, '$1'], // Images
-                [/`([^`]+)`/g, '$1'],                 // Code
-                [/\*\*([^*]+)\*\*/g, '$1'],           // Bold
-                [/\*([^*]+)\*/g, '$1'],               // Italic
-                [/__([^_]+)__/g, '$1'],               // Bold alt
-                [/_([^_]+)_/g, '$1'],                 // Italic alt
-                [/~~([^~]+)~~/g, '$1']                // Strikethrough
-            ];
-
-            return patterns.reduce((str, [pattern, replacement]) =>
-                str.replace(pattern, replacement), String(text || '')
-            ).replace(/\s+/g, ' ').trim();
-        }
-
-        function createMindmapNode(content) {
-            return {
-                content: normalizeMindmapLabel(content),
-                children: []
-            };
-        }
-
-        function buildMarkmapTree(markdown) {
-            const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
-            const root = createMindmapNode(getMindmapRootLabel());
-            const headingStack = [root];
-            const listStack = [];
-            let lastNode = null;
-            let inCodeBlock = false;
-
-            for (const rawLine of lines) {
-                const line = rawLine.replace(/\t/g, '    ');
-                const trimmed = line.trim();
-                if (!trimmed) continue;
-
-                if (trimmed.startsWith('```')) {
-                    inCodeBlock = !inCodeBlock;
-                    continue;
-                }
-                if (inCodeBlock) continue;
-
-                const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
-                if (headingMatch) {
-                    const level = headingMatch[1].length;
-                    const label = normalizeMindmapLabel(headingMatch[2]);
-                    if (!label) continue;
-
-                    headingStack.length = level;
-                    const parent = headingStack[level - 1] || root;
-                    const node = createMindmapNode(label);
-                    parent.children.push(node);
-                    headingStack[level] = node;
-                    listStack.length = 0;
-                    lastNode = node;
-                    continue;
-                }
-
-                const listMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.+)$/);
-                if (listMatch) {
-                    const indent = listMatch[1].length;
-                    const level = Math.floor(indent / 2) + 1;
-                    const label = normalizeMindmapLabel(listMatch[3]);
-                    if (!label) continue;
-
-                    listStack.length = level;
-                    const parent = level === 1
-                        ? headingStack[headingStack.length - 1] || root
-                        : listStack[level - 1] || headingStack[headingStack.length - 1] || root;
-                    const node = createMindmapNode(label);
-                    parent.children.push(node);
-                    listStack[level] = node;
-                    lastNode = node;
-                    continue;
-                }
-
-                const label = normalizeMindmapLabel(trimmed);
-                if (!label) continue;
-
-                if (lastNode) {
-                    lastNode.content = normalizeMindmapLabel(`${lastNode.content} ${label}`);
-                } else {
-                    root.children.push(createMindmapNode(label));
-                }
-            }
-
-            if (root.children.length === 1 && !root.children[0].children.length) {
-                return {
-                    content: root.content,
-                    children: root.children
-                };
-            }
-
-            return root;
-        }
-
-        function buildMindmapMessageHtml(markdown) {
-            const data = getMindmapMarkdown(markdown);
-            if (!data) {
-                return renderStructuredFallback('', '正在等待思维导图内容...');
-            }
-
-            const lines = data.split('\n').map(line => line.trim()).filter(Boolean);
-            const preview = lines.slice(0, 3).join(' / ');
-
-            // Count nodes
-            const headingCount = lines.filter(line => line.startsWith('#')).length;
-            const listCount = lines.filter(line => /^\s*[-*+]/.test(line)).length;
-            const totalNodes = headingCount + listCount;
-
-            const stats = totalNodes > 0 ? `${totalNodes} 个节点` : '';
-            const summary = preview || '思维导图内容已准备好，点击按钮在站内查看。';
-
-            return `<div class="rh-mindmap-card" data-markdown="${escapeHtml(encodeStructuredData(data))}">
-                <div class="rh-mindmap-copy">
-                    <div class="rh-mindmap-title">思维导图已生成</div>
-                    <div class="rh-mindmap-summary">${escapeHtml(summary)}</div>
-                    ${stats ? `<div class="mindmap-summary-stats">${stats}</div>` : ''}
-                </div>
-                <button type="button" class="rh-view-mindmap">查看</button>
-            </div>`;
-        }
-
-        let markmapLoadPromise = null;
-
-        async function ensureMarkmapReady() {
-            if (markmapLoadPromise) return markmapLoadPromise;
-
-            markmapLoadPromise = (async () => {
-                if (window.d3 && window.markmap?.Markmap && window.markmap?.Transformer) {
-                    if (!markmapTransformer) {
-                        markmapTransformer = new window.markmap.Transformer();
-                    }
-                    return window.markmap;
-                }
-
-                const loadScript = (src) => new Promise((resolve, reject) => {
-                    const script = document.createElement('script');
-                    script.src = src;
-                    script.onload = resolve;
-                    script.onerror = reject;
-                    document.head.appendChild(script);
-                });
-
-                await loadScript('https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js');
-                await loadScript('https://cdn.jsdelivr.net/npm/markmap-lib@0.18.12/dist/browser/index.iife.js');
-                await loadScript('https://cdn.jsdelivr.net/npm/markmap-view@0.18.12/dist/browser/index.js');
-
-                if (!markmapTransformer) {
-                    markmapTransformer = new window.markmap.Transformer();
-                }
-                return window.markmap;
-            })();
-
-            return markmapLoadPromise;
-        }
-
-        const MINDMAP_BRANCH_COLORS = ['#5B8FF9', '#5AD8A6', '#5D7092', '#F6BD16', '#E86452', '#6DC8EC', '#945FB9', '#FF9845'];
-        const MINDMAP_BASE_TEXT_COLOR = '#3A2D22';
-        const MINDMAP_ROOT_FILL = '#FFF6E8';
-        const MINDMAP_FONT_FAMILY = '"Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
-
-        function getMindmapNodeDepth(node) {
-            return Number(node?.state?.depth ?? node?.depth ?? node?.dataset?.depth ?? 0);
-        }
-
-        function getMindmapBranchColor(node) {
-            const depth = getMindmapNodeDepth(node);
-            return MINDMAP_BRANCH_COLORS[Math.abs(depth) % MINDMAP_BRANCH_COLORS.length];
-        }
-
-        function mixMindmapColors(color, target, ratio) {
-            const normalize = (value) => String(value || '').replace('#', '').trim();
-            const source = normalize(color);
-            const destination = normalize(target);
-            if (source.length !== 6 || destination.length !== 6) {
-                return color;
-            }
-
-            const clamp = (value) => Math.max(0, Math.min(255, value));
-            const mixChannel = (index) => {
-                const start = parseInt(source.slice(index, index + 2), 16);
-                const end = parseInt(destination.slice(index, index + 2), 16);
-                return clamp(Math.round(start + (end - start) * ratio));
-            };
-
-            return `#${[0, 2, 4].map((index) => mixChannel(index).toString(16).padStart(2, '0')).join('')}`;
-        }
-
-        function getMindmapGlobalStyle() {
-            return `
-                .markmap {
-                    --markmap-font: 520 14px/1.45 ${MINDMAP_FONT_FAMILY};
-                    --markmap-text-color: ${MINDMAP_BASE_TEXT_COLOR};
-                }
-                .markmap .markmap-foreign,
-                .markmap .markmap-foreign > div,
-                .markmap .markmap-foreign > div > div {
-                    font-family: ${MINDMAP_FONT_FAMILY};
-                }
-            `;
-        }
-
-        function getMindmapTextStyle(depth, branchColor) {
-            if (depth <= 1) {
-                return {
-                    color: MINDMAP_BASE_TEXT_COLOR,
-                    fontFamily: MINDMAP_FONT_FAMILY,
-                    fontSize: '18px',
-                    fontWeight: '700',
-                    letterSpacing: '0.01em'
-                };
-            }
-
-            if (depth === 2) {
-                return {
-                    color: mixMindmapColors(branchColor, MINDMAP_BASE_TEXT_COLOR, 0.35),
-                    fontFamily: MINDMAP_FONT_FAMILY,
-                    fontSize: '15px',
-                    fontWeight: '650',
-                    letterSpacing: '0.005em'
-                };
-            }
-
-            return {
-                color: mixMindmapColors(branchColor, MINDMAP_BASE_TEXT_COLOR, 0.55),
-                fontFamily: MINDMAP_FONT_FAMILY,
-                fontSize: '14px',
-                fontWeight: '520',
-                letterSpacing: '0'
-            };
-        }
-
-        function applyMindmapLabelTextStyles(label, textStyle) {
-            if (!label || !textStyle) {
-                return;
-            }
-
-            label.style.setProperty('color', textStyle.color, 'important');
-            label.style.setProperty('font-family', textStyle.fontFamily, 'important');
-            label.style.setProperty('font-size', textStyle.fontSize, 'important');
-            label.style.setProperty('font-weight', textStyle.fontWeight, 'important');
-            label.style.setProperty('letter-spacing', textStyle.letterSpacing, 'important');
-        }
-
-        function applyMindmapVisualStyles() {
-            const nodes = mindmapStage.querySelectorAll('g.markmap-node');
-            nodes.forEach((nodeElement) => {
-                const nodeData = nodeElement.__data__ || { dataset: nodeElement.dataset };
-                const depth = getMindmapNodeDepth(nodeData);
-                const branchColor = getMindmapBranchColor(nodeData);
-                const circle = nodeElement.querySelector('circle');
-                const line = nodeElement.querySelector('line');
-                const label = nodeElement.querySelector('foreignObject div div') || nodeElement.querySelector('foreignObject div');
-
-                if (line) {
-                    line.setAttribute('stroke', branchColor);
-                }
-
-                if (circle) {
-                    circle.setAttribute('stroke', branchColor);
-                    circle.setAttribute('stroke-width', depth <= 1 ? '2.25' : '1.75');
-                    circle.setAttribute('fill', depth <= 1 ? MINDMAP_ROOT_FILL : '#FFFFFF');
-                }
-
-                if (label) {
-                    const textStyle = getMindmapTextStyle(depth, branchColor);
-                    applyMindmapLabelTextStyles(label, textStyle);
-                    label.querySelectorAll('*').forEach((child) => {
-                        applyMindmapLabelTextStyles(child, textStyle);
-                    });
-                }
-            });
-        }
-
-        function scheduleMindmapVisualStyles() {
-            // Apply styles once immediately, then once after DOM updates
-            applyMindmapVisualStyles();
-            requestAnimationFrame(() => applyMindmapVisualStyles());
-        }
-
-        function getMindmapRenderOptions() {
-            return {
-                autoFit: false,
-                duration: 300,
-                fitRatio: 0.95,
-                maxWidth: 300,
-                paddingX: 20,
-                spacingVertical: 10,
-                spacingHorizontal: 80,
-                color: (node) => {
-                    return getMindmapBranchColor(node);
-                },
-                style: () => getMindmapGlobalStyle()
-            };
-        }
-
-        function stabilizeMindmapToggleZoom(instance, svg) {
-            if (!instance || !svg || instance.__rhZoomStabilized) {
-                return instance;
-            }
-
-            const originalToggleNode = typeof instance.toggleNode === 'function'
-                ? instance.toggleNode.bind(instance)
-                : null;
-
-            if (!originalToggleNode) {
-                return instance;
-            }
-
-            instance.toggleNode = async (...args) => {
-                const beforeTransform = getMindmapZoomTransform(svg);
-                const result = await originalToggleNode(...args);
-                const transitionDuration = Number(instance.options?.duration) || 0;
-                const restoreMindmapState = () => {
-                    scheduleMindmapVisualStyles();
-                    if (beforeTransform) {
-                        applyMindmapZoomTransform(instance, svg, beforeTransform);
-                    }
-                };
-
-                requestAnimationFrame(restoreMindmapState);
-                window.setTimeout(restoreMindmapState, transitionDuration + 24);
-
-                return result;
-            };
-
-            instance.__rhZoomStabilized = true;
-            return instance;
-        }
-
-        async function renderMindmap(markdown, precomputedRoot = null) {
-            const content = getMindmapMarkdown(markdown);
-            if (!content) {
-                throw new Error('思维导图内容为空');
-            }
-
-            const markmap = await ensureMarkmapReady();
-            const { Markmap } = markmap;
-
-            // Use precomputed root from cache when available to avoid duplicate parsing work.
-            const root = precomputedRoot || markmapTransformer.transform(content).root;
-
-            mindmapStage.innerHTML = '';
-            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-
-            // Responsive sizing
-            const containerWidth = mindmapStage.clientWidth;
-            const containerHeight = mindmapStage.clientHeight;
-            const width = Math.max(containerWidth - 24, 600);
-            const height = Math.max(containerHeight - 24, 400);
-
-            svg.setAttribute('width', String(width));
-            svg.setAttribute('height', String(height));
-            svg.style.width = '100%';
-            svg.style.height = '100%';
-            mindmapStage.appendChild(svg);
-
-            const mm = stabilizeMindmapToggleZoom(
-                Markmap.create(svg, getMindmapRenderOptions(), root),
-                svg
-            );
-
-            scheduleMindmapVisualStyles();
-
-            // Store instance for toolbar controls
-            currentMindmapInstance = mm;
-            currentMindmapData = content;
-
-            // Show toolbar
-            document.getElementById('mindmap-toolbar').style.display = 'flex';
-
-            return mm;
-        }
-
-        function closeMindmapModal() {
-            mindmapModal.style.display = 'none';
-            mindmapStage.innerHTML = '';
-            mindmapStatus.textContent = '';
-            document.getElementById('mindmap-toolbar').style.display = 'none';
-            currentMindmapInstance = null;
-            currentMindmapData = null;
-
-            // Exit fullscreen if active
-            if (document.fullscreenElement === mindmapStage) {
-                document.exitFullscreen();
-            }
-        }
-
-        function openMindmapModal(markdown) {
-            const content = getMindmapMarkdown(markdown);
-            if (!content) {
-                addSystemMessage('思维导图内容为空，无法查看。');
-                return;
-            }
-
-            mindmapModalTitle.textContent = currentFileName ? `${currentFileName} · 思维导图` : '文章思维导图';
-            mindmapStatus.textContent = '正在渲染思维导图...';
-            mindmapStage.innerHTML = '';
-            document.getElementById('mindmap-toolbar').style.display = 'none';
-            mindmapModal.style.display = 'flex';
-
-            // Check cache
-            const cacheKey = hashString(content);
-
-            requestAnimationFrame(async () => {
-                try {
-                    if (mindmapCache.has(cacheKey)) {
-                        // Cache hit: reuse parsed tree, but always render into a fresh SVG.
-                        const cachedData = mindmapCache.get(cacheKey);
-                        await renderMindmap(content, cachedData.root);
-                        mindmapStatus.textContent = '';
-                    } else {
-                        // Render fresh
-                        await ensureMarkmapReady();
-                        const { root } = markmapTransformer.transform(content);
-                        await renderMindmap(content, root);
-                        mindmapStatus.textContent = '';
-
-                        // Cache parsed root only. Caching rendered HTML can duplicate markmap layers.
-                        mindmapCache.set(cacheKey, {
-                            root: root
-                        });
-
-                        // Limit cache size to 10 items
-                        if (mindmapCache.size > 10) {
-                            const firstKey = mindmapCache.keys().next().value;
-                            mindmapCache.delete(firstKey);
-                        }
-                    }
-                } catch (error) {
-                    mindmapStatus.textContent = `思维导图渲染失败: ${error.message}`;
-                }
-            });
-        }
-
-        function extractFencedBlock(markdown, language) {
-            const pattern = new RegExp(`\`\`\`${language}\\s*([\\s\\S]*?)\`\`\``, 'i');
-            const match = String(markdown || '').match(pattern);
-            return match ? match[1].trim() : '';
-        }
-
-        function findBalancedJsonCandidate(text, startIndex) {
-            const input = String(text || '');
-            const openingChar = input[startIndex];
-            const closingChar = openingChar === '{' ? '}' : ']';
-            let depth = 0;
-            let inString = false;
-            let escaping = false;
-
-            for (let i = startIndex; i < input.length; i += 1) {
-                const char = input[i];
-
-                if (inString) {
-                    if (escaping) {
-                        escaping = false;
-                    } else if (char === '\\') {
-                        escaping = true;
-                    } else if (char === '"') {
-                        inString = false;
-                    }
-                    continue;
-                }
-
-                if (char === '"') {
-                    inString = true;
-                    continue;
-                }
-
-                if (char === openingChar) {
-                    depth += 1;
-                    continue;
-                }
-
-                if (char === closingChar) {
-                    depth -= 1;
-                    if (depth === 0) {
-                        return input.slice(startIndex, i + 1).trim();
-                    }
-                    continue;
-                }
-
-                if ((openingChar === '{' && char === ']') || (openingChar === '[' && char === '}')) {
-                    return '';
-                }
-            }
-
-            return '';
-        }
-
-        function extractBalancedJsonPayload(markdown) {
-            const input = String(markdown || '');
-            const candidates = [];
-
-            for (let i = 0; i < input.length; i += 1) {
-                const char = input[i];
-                if (char !== '{' && char !== '[') {
-                    continue;
-                }
-
-                const candidate = findBalancedJsonCandidate(input, i);
-                if (!candidate) {
-                    continue;
-                }
-
-                try {
-                    const parsed = JSON.parse(candidate);
-                    candidates.push({ json: candidate, data: parsed });
-                } catch (error) {
-                    // Continue searching; earlier braces may belong to prose/code examples.
-                }
-            }
-
-            // Prefer JSON objects that contain "questions" field (for quiz/question operations)
-            for (const item of candidates) {
-                if (item.data && item.data.questions && Array.isArray(item.data.questions)) {
-                    return item.json;
-                }
-            }
-
-            // Fall back to first valid JSON found
-            if (candidates.length > 0) {
-                return candidates[0].json;
-            }
-
-            return '';
-        }
-
-        function extractJsonPayload(markdown) {
-            const fenced = extractFencedBlock(markdown, 'json');
-            if (fenced) {
-                return fenced;
-            }
-
-            const trimmed = String(markdown || '').trim();
-            const balanced = extractBalancedJsonPayload(trimmed);
-            if (balanced) {
-                return balanced;
-            }
-
-            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-                return trimmed;
-            }
-            return '';
-        }
-
-        function parseJsonWithRecovery(payload) {
-            const input = String(payload || '').trim();
-            if (!input) return null;
-
-            const attempts = [input];
-            const noTrailingCommas = input.replace(/,\s*([}\]])/g, '$1');
-            if (noTrailingCommas !== input) {
-                attempts.push(noTrailingCommas);
-            }
-
-            for (const candidate of attempts) {
-                try {
-                    return JSON.parse(candidate);
-                } catch (error) {
-                    // Keep trying fallbacks.
-                }
-            }
-
-            return null;
-        }
-
-        function parseJsonContent(markdown) {
-            const payload = extractJsonPayload(markdown);
-            if (!payload) {
-                const recoveredQuestions = extractLooseQuestionItems(markdown);
-                if (recoveredQuestions.length) {
-                    return {
-                        payload: '',
-                        data: { questions: recoveredQuestions },
-                        recovered: true
-                    };
-                }
-                return null;
-            }
-            const data = parseJsonWithRecovery(payload);
-            if (!data) {
-                // Fallback 1: if fenced JSON is malformed, try to locate another valid balanced JSON candidate.
-                const balancedFromMarkdown = extractBalancedJsonPayload(String(markdown || ''));
-                if (balancedFromMarkdown && balancedFromMarkdown !== payload) {
-                    const balancedData = parseJsonWithRecovery(balancedFromMarkdown);
-                    if (balancedData) {
-                        return { payload: balancedFromMarkdown, data: balancedData };
-                    }
-                }
-
-                // Fallback 2: recover question items from partially broken JSON text.
-                const recoveredQuestions = extractLooseQuestionItems(payload || markdown);
-                if (recoveredQuestions.length) {
-                    return {
-                        payload,
-                        data: { questions: recoveredQuestions },
-                        recovered: true
-                    };
-                }
-                return null;
-            }
-            return { payload, data };
-        }
-
-        function formatJsonForDisplay(payload) {
-            if (!payload) return '';
-            try {
-                const parsed = JSON.parse(payload);
-                return JSON.stringify(parsed, null, 2);
-            } catch (error) {
-                return String(payload);
-            }
-        }
-
-        function renderQuestionLoadingHtml() {
-            return '<p class="rh-empty">正在生成题目中......</p>';
-        }
-
-        function tryParseStructuredValue(value) {
-            if (typeof value !== 'string') return null;
-            const trimmed = value.trim();
-            if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
-                return null;
-            }
-
-            try {
-                return JSON.parse(trimmed);
-            } catch (error) {
-                return null;
-            }
-        }
-
-        function decodeLooseJsonValue(token) {
-            const raw = String(token || '').trim();
-            if (!raw) return '';
-
-            if (raw.startsWith('"')) {
-                try {
-                    return JSON.parse(raw);
-                } catch (error) {
-                    return raw.replace(/^"+|"+$/g, '').replace(/\\"/g, '"');
-                }
-            }
-
-            return raw.replace(/[,\]\}]+$/g, '').trim();
-        }
-
-        function extractLooseFieldValue(text, fieldKeys) {
-            const source = String(text || '');
-            for (const key of fieldKeys) {
-                const pattern = new RegExp(`"${key}"\\s*:\\s*("([^"\\\\]|\\\\.)*"|[^,\\n\\r\\]}]+)`, 'i');
-                const match = source.match(pattern);
-                if (!match) continue;
-                const value = decodeLooseJsonValue(match[1]);
-                if (value) return String(value).trim();
-            }
-            return '';
-        }
-
-        function extractLooseOptions(chunk) {
-            const source = String(chunk || '');
-            const blockMatch = source.match(/"options"\s*:\s*\[([\s\S]*?)\]/i);
-            if (!blockMatch) return [];
-
-            const options = [];
-            const optionRegex = /"option"\s*:\s*("([^"\\]|\\.)*"|[^,\]\}\n\r]+)[\s\S]*?"content"\s*:\s*("([^"\\]|\\.)*"|[^,\]\}\n\r]+)/gi;
-            let optionMatch;
-            while ((optionMatch = optionRegex.exec(blockMatch[1])) !== null) {
-                const option = decodeLooseJsonValue(optionMatch[1]);
-                const content = decodeLooseJsonValue(optionMatch[3]);
-                if (!option || !content) continue;
-                options.push({
-                    option: String(option).trim(),
-                    content: String(content).trim()
-                });
-            }
-
-            return options;
-        }
-
-        function extractLooseQuestionItems(text) {
-            const source = String(text || '');
-            if (!source) return [];
-
-            const idRegex = /"id"\s*:\s*("([^"\\]|\\.)*"|\d+)/gi;
-            const anchors = [];
-            let idMatch;
-            while ((idMatch = idRegex.exec(source)) !== null) {
-                anchors.push({
-                    index: idMatch.index,
-                    id: decodeLooseJsonValue(idMatch[1])
-                });
-            }
-
-            if (!anchors.length) {
-                const questionRegex = /"question"\s*:/gi;
-                let questionMatch;
-                let autoIndex = 1;
-                while ((questionMatch = questionRegex.exec(source)) !== null) {
-                    anchors.push({
-                        index: questionMatch.index,
-                        id: String(autoIndex)
-                    });
-                    autoIndex += 1;
-                }
-                if (!anchors.length) {
-                    return [];
-                }
-            }
-
-            const items = [];
-            for (let i = 0; i < anchors.length; i += 1) {
-                const start = anchors[i].index;
-                const end = i + 1 < anchors.length ? anchors[i + 1].index : source.length;
-                const chunk = source.slice(start, end);
-
-                const question = extractLooseFieldValue(chunk, ['question', 'prompt', 'stem', 'statement', 'sentence', 'text', 'content']);
-                if (!question) continue;
-
-                const answer = extractLooseFieldValue(chunk, ['answer', 'correct_answer', 'correctAnswer', 'reference_answer', 'referenceAnswer']);
-                const options = extractLooseOptions(chunk);
-
-                items.push({
-                    id: String(anchors[i].id || items.length + 1),
-                    question,
-                    options,
-                    answer
-                });
-            }
-
-            return items;
-        }
-
-        function pickFirstValue(source, keys) {
-            if (!source || typeof source !== 'object') return undefined;
-            for (const key of keys) {
-                if (source[key] !== undefined && source[key] !== null) {
-                    return source[key];
-                }
-            }
-            return undefined;
-        }
-
-        function pickFirstDeepValue(source, keys, seen = new Set()) {
-            if (source === undefined || source === null) return undefined;
-
-            const parsedSource = typeof source === 'string' ? tryParseStructuredValue(source) : null;
-            if (parsedSource) {
-                return pickFirstDeepValue(parsedSource, keys, seen);
-            }
-
-            if (typeof source !== 'object') return undefined;
-            if (seen.has(source)) return undefined;
-            seen.add(source);
-
-            for (const key of keys) {
-                if (source[key] !== undefined && source[key] !== null) {
-                    return source[key];
-                }
-            }
-
-            if (Array.isArray(source)) {
-                for (const item of source) {
-                    const nested = pickFirstDeepValue(item, keys, seen);
-                    if (nested !== undefined) {
-                        return nested;
-                    }
-                }
-                return undefined;
-            }
-
-            for (const value of Object.values(source)) {
-                const nested = pickFirstDeepValue(value, keys, seen);
-                if (nested !== undefined) {
-                    return nested;
-                }
-            }
-
-            return undefined;
-        }
-
-        function normalizeScalarValue(value) {
-            if (value === undefined || value === null) return '';
-            if (typeof value === 'string') return value.trim();
-            if (typeof value === 'number') return String(value);
-            if (typeof value === 'boolean') return value ? 'true' : 'false';
-            if (Array.isArray(value)) {
-                return value
-                    .map((item) => normalizeScalarValue(item))
-                    .filter(Boolean)
-                    .join('\n\n');
-            }
-            if (typeof value === 'object') {
-                return normalizeScalarValue(
-                    pickFirstValue(value, [
-                        'answer',
-                        'answers',
-                        'correct_answer',
-                        'correctAnswer',
-                        'reference_answer',
-                        'referenceAnswer',
-                        'reference_answers',
-                        'referenceAnswers',
-                        'sample_answer',
-                        'sampleAnswer',
-                        'sample_answers',
-                        'sampleAnswers',
-                        'model_answer',
-                        'modelAnswer',
-                        'model_answers',
-                        'modelAnswers',
-                        'ideal_answer',
-                        'idealAnswer',
-                        'expected_answer',
-                        'expectedAnswer',
-                        'suggested_answer',
-                        'suggestedAnswer',
-                        'option',
-                        'label',
-                        'key',
-                        'id',
-                        'value',
-                        'content',
-                        'text'
-                    ])
-                );
-            }
-            return String(value).trim();
-        }
-
-        function unwrapStructuredData(data) {
-            let current = data;
-            const seen = new Set();
-
-            while (current && typeof current === 'object' && !Array.isArray(current) && !seen.has(current)) {
-                seen.add(current);
-
-                const directArray = pickFirstValue(current, [
-                    'questions',
-                    'items',
-                    'results',
-                    'mcqs',
-                    'qa',
-                    'quiz',
-                    'data',
-                    'payload',
-                    'response',
-                    'result',
-                    'output',
-                    'multiple_choice_questions',
-                    'multipleChoiceQuestions',
-                    'true_false_questions',
-                    'trueFalseQuestions',
-                    'open_questions',
-                    'openEndedQuestions'
-                ]);
-                if (Array.isArray(directArray)) {
-                    return directArray;
-                }
-
-                const nestedCandidate = pickFirstValue(current, [
-                    'data',
-                    'payload',
-                    'response',
-                    'result',
-                    'output',
-                    'content'
-                ]);
-                const parsedNested = tryParseStructuredValue(nestedCandidate);
-                if (parsedNested) {
-                    current = parsedNested;
-                    continue;
-                }
-                if (nestedCandidate && typeof nestedCandidate === 'object') {
-                    current = nestedCandidate;
-                    continue;
-                }
-                break;
-            }
-
-            return current;
-        }
-
-        function extractQuestionItems(data) {
-            const normalized = unwrapStructuredData(data);
-            if (Array.isArray(normalized)) {
-                return normalized;
-            }
-            if (!normalized || typeof normalized !== 'object') {
-                return [];
-            }
-
-            const arrayKeys = [
-                'questions',
-                'items',
-                'results',
-                'mcqs',
-                'qa',
-                'quiz',
-                'statements',
-                'true_false_statements',
-                'trueFalseStatements',
-                'true_false_items',
-                'trueFalseItems',
-                'judgments',
-                'multiple_choice_questions',
-                'multipleChoiceQuestions',
-                'true_false_questions',
-                'trueFalseQuestions',
-                'open_questions',
-                'openEndedQuestions'
-            ];
-            for (const key of arrayKeys) {
-                const candidate = normalized[key];
-                if (Array.isArray(candidate)) {
-                    return candidate;
-                }
-                const parsedCandidate = tryParseStructuredValue(candidate);
-                if (Array.isArray(parsedCandidate)) {
-                    return parsedCandidate;
-                }
-                if (parsedCandidate && typeof parsedCandidate === 'object') {
-                    const nestedItems = extractQuestionItems(parsedCandidate);
-                    if (nestedItems.length) {
-                        return nestedItems;
-                    }
-                }
-            }
-
-            const arrayValues = Object.values(normalized).filter(Array.isArray);
-            for (const candidate of arrayValues) {
-                const questionLikeItems = candidate.filter((item) => {
-                    if (!item || typeof item !== 'object') {
-                        return false;
-                    }
-                    const text = normalizeQuestionText(item);
-                    return Boolean(text);
-                });
-                if (questionLikeItems.length) {
-                    return questionLikeItems;
-                }
-            }
-
-            const objectValues = Object.values(normalized).filter(
-                (value) => value && typeof value === 'object' && !Array.isArray(value)
-            );
-            const questionLikeValues = objectValues.filter((item) => {
-                const text = normalizeScalarValue(
-                    pickFirstValue(item, ['question', 'prompt', 'stem', 'statement', 'sentence', 'text', 'content'])
-                );
-                return Boolean(text);
-            });
-            return questionLikeValues;
-        }
-
-        function getOptionLetter(index) {
-            return String.fromCharCode(65 + index);
-        }
-
-        function normalizeOptionItem(option, index) {
-            if (typeof option === 'string') {
-                return {
-                    option: getOptionLetter(index),
-                    content: option
-                };
-            }
-            if (!option || typeof option !== 'object') {
-                return null;
-            }
-
-            const entries = Object.entries(option).filter(([, value]) => value !== undefined && value !== null);
-            if (
-                !('option' in option) &&
-                !('label' in option) &&
-                !('key' in option) &&
-                !('id' in option) &&
-                entries.length === 1
-            ) {
-                const [entryKey, entryValue] = entries[0];
-                return {
-                    option: normalizeScalarValue(entryKey) || getOptionLetter(index),
-                    content: normalizeScalarValue(entryValue)
-                };
-            }
-
-            const optionKey = normalizeScalarValue(
-                pickFirstValue(option, ['option', 'label', 'key', 'id'])
-            ) || getOptionLetter(index);
-            const optionText = normalizeScalarValue(
-                pickFirstValue(option, [
-                    'content',
-                    'text',
-                    'option_text',
-                    'optionText',
-                    'answer_text',
-                    'answerText',
-                    'description',
-                    'value',
-                    'label'
-                ])
-            );
-
-            return {
-                option: optionKey,
-                content: optionText
-            };
-        }
-
-        function normalizeOptions(question) {
-            const rawOptions = pickFirstValue(question, [
-                'options',
-                'choices',
-                'answers',
-                'candidates',
-                'selections',
-                'alternatives'
-            ]);
-
-            if (Array.isArray(rawOptions)) {
-                return rawOptions
-                    .map((option, index) => normalizeOptionItem(option, index))
-                    .filter((option) => option && option.content);
-            }
-
-            if (rawOptions && typeof rawOptions === 'object') {
-                return Object.entries(rawOptions)
-                    .map(([key, value], index) => normalizeOptionItem({ option: key, content: value }, index))
-                    .filter((option) => option && option.content);
-            }
-
-            return [];
-        }
-
-        function looksLikeTrueFalse(question, options, answer) {
-            const typeHint = normalizeScalarValue(pickFirstValue(question, ['type', 'question_type', 'questionType'])).toLowerCase();
-            if (typeHint.includes('true') || typeHint.includes('false') || typeHint === 'tf') {
-                return true;
-            }
-            if (options.length === 2) {
-                const optionTexts = options.map((option) => option.content.toLowerCase());
-                if (optionTexts.includes('true') && optionTexts.includes('false')) {
-                    return true;
-                }
-            }
-            const normalizedAnswer = String(answer || '').trim().toUpperCase();
-            return ['A', 'B', 'TRUE', 'FALSE', 'T', 'F'].includes(normalizedAnswer);
-        }
-
-        function normalizeQuizAnswer(question, options) {
-            const rawAnswer = normalizeScalarValue(
-                pickFirstDeepValue(question, [
-                    'answer',
-                    'correct_answer',
-                    'correctAnswer',
-                    'reference_answer',
-                    'referenceAnswer',
-                    'solution',
-                    'correct_option',
-                    'correctOption'
-                ])
-            );
-            if (!rawAnswer) {
-                return '';
-            }
-
-            const upperAnswer = rawAnswer.toUpperCase();
-            if (upperAnswer === 'TRUE' || upperAnswer === 'T') {
-                return 'A';
-            }
-            if (upperAnswer === 'FALSE' || upperAnswer === 'F') {
-                return 'B';
-            }
-
-            const optionByKey = options.find((option) => option.option.toUpperCase() === upperAnswer);
-            if (optionByKey) {
-                return optionByKey.option;
-            }
-
-            const optionByText = options.find((option) => option.content.toLowerCase() === rawAnswer.toLowerCase());
-            if (optionByText) {
-                return optionByText.option;
-            }
-
-            return rawAnswer;
-        }
-
-        function normalizeQuestionText(question) {
-            return normalizeScalarValue(
-                pickFirstDeepValue(question, ['question', 'prompt', 'stem', 'statement', 'sentence', 'text', 'content'])
-            );
-        }
-
-        function normalizeQuestionAnswer(question) {
-            return normalizeScalarValue(
-                pickFirstDeepValue(question, [
-                    'answer',
-                    'answers',
-                    'reference_answer',
-                    'referenceAnswer',
-                    'reference_answers',
-                    'referenceAnswers',
-                    'sample_answer',
-                    'sampleAnswer',
-                    'sample_answers',
-                    'sampleAnswers',
-                    'model_answer',
-                    'modelAnswer',
-                    'model_answers',
-                    'modelAnswers',
-                    'ideal_answer',
-                    'idealAnswer',
-                    'expected_answer',
-                    'expectedAnswer',
-                    'correct_answer',
-                    'correctAnswer',
-                    'suggested_answer',
-                    'suggestedAnswer',
-                    'explanation',
-                    'explanations',
-                    'solution',
-                    'solutions'
-                ])
-            );
-        }
-
-        function normalizeQuestionId(question, index) {
-            const rawId = normalizeScalarValue(pickFirstDeepValue(question, ['id', 'number', 'index']));
-            return rawId || String(index + 1);
-        }
-
-        function buildQuizHtml(data, currentFileName, quizType = 'mcq', isFinal = false) {
-            const rawQuestions = extractQuestionItems(data);
-            const questions = rawQuestions.map((question, index) => {
-                const normalizedQuestion = question && typeof question === 'object'
-                    ? question
-                    : { question: normalizeScalarValue(question) };
-                let options = normalizeOptions(normalizedQuestion);
-                const provisionalAnswer = normalizeQuizAnswer(normalizedQuestion, options);
-
-                if (!options.length && (quizType === 'tf' || looksLikeTrueFalse(normalizedQuestion, options, provisionalAnswer))) {
-                    options = [
-                        { option: 'A', content: 'True' },
-                        { option: 'B', content: 'False' }
-                    ];
-                }
-
-                return {
-                    id: normalizeQuestionId(normalizedQuestion, index),
-                    question: normalizeQuestionText(normalizedQuestion),
-                    options,
-                    answer: normalizeQuizAnswer(normalizedQuestion, options)
-                };
-            }).filter((question) => question.question);
-
-            if (!questions.length) {
-                if (!isFinal) {
-                    return renderQuestionLoadingHtml();
-                }
-                return '<p class="rh-empty">没有找到题目数据。</p>';
-            }
-
-            const cards = questions.map((question, index) => {
-                const qText = escapeHtml(question?.question ?? '');
-                const qId = escapeHtml(String(question?.id ?? index + 1));
-                const correct = escapeHtml(String(question?.answer ?? ''));
-                const options = Array.isArray(question?.options) ? question.options : [];
-                const optionHtml = options.map((option) => {
-                    const rawOption = option ?? '';
-                    const optionKey = escapeHtml(String(option?.option ?? option?.label ?? rawOption ?? ''));
-                    const optionText = escapeHtml(String(option?.content ?? option?.text ?? (typeof rawOption === 'string' ? rawOption : '')));
-                    return `<button type="button" class="rh-option" data-option="${optionKey}">
-                        <span class="rh-option-letter">${optionKey}</span>
-                        <span class="rh-option-text">${optionText}</span>
-                    </button>`;
-                }).join('');
-
-                return `<div class="rh-question-card" data-correct-answer="${correct}">
-                    <div class="rh-question-title">题目 ${qId}</div>
-                    <div class="rh-question-text">${qText}</div>
-                    <div class="rh-options">${optionHtml}</div>
-                    <div class="rh-feedback" aria-live="polite"></div>
-                </div>`;
-            }).join('');
-
-            return `<div class="rh-quiz">
-                <div class="rh-quiz-header">全文选择/判断题 · ${escapeHtml(currentFileName || '')}</div>
-                ${cards}
-            </div>`;
-        }
-
-        function buildQuestionListHtml(data, currentFileName, isFinal = false) {
-            const rawQuestions = extractQuestionItems(data);
-            const questions = rawQuestions.map((question, index) => {
-                const normalizedQuestion = question && typeof question === 'object'
-                    ? question
-                    : { question: normalizeScalarValue(question) };
-                const answer = normalizeQuestionAnswer(normalizedQuestion);
-                return {
-                    id: normalizeQuestionId(normalizedQuestion, index),
-                    question: normalizeQuestionText(normalizedQuestion),
-                    answer: answer
-                };
-            }).filter((question) => question.question);
-
-            if (!questions.length) {
-                if (!isFinal) {
-                    return renderQuestionLoadingHtml();
-                }
-                return '<p class="rh-empty">没有找到问答题数据。</p>';
-            }
-
-            const cards = questions.map((question, index) => {
-                const qText = escapeHtml(question?.question ?? '');
-                const qId = escapeHtml(String(question?.id ?? index + 1));
-                const answer = escapeHtml(String(question?.answer ?? ''));
-                return `<div class="rh-question-card">
-                    <div class="rh-question-title">问题 ${qId}</div>
-                    <div class="rh-question-text">${qText}</div>
-                    <button type="button" class="rh-toggle-answer">Show Answer</button>
-                    <div class="rh-answer">${answer}</div>
-                </div>`;
-            }).join('');
-
-            return `<div class="rh-question-list">
-                <div class="rh-quiz-header">全文问答 · ${escapeHtml(currentFileName || '')}</div>
-                ${cards}
-            </div>`;
-        }
-
         function renderStructuredFallback(markdown, tip) {
             const content = String(markdown || '').trim();
             const body = content ? `<pre><code>${escapeHtml(content)}</code></pre>` : '<p>请耐心等待...</p>';
@@ -4077,56 +2256,19 @@
         }
 
         function markdownToHtml(markdown, operation, isFinal = false) {
-            const currentFileName = document.getElementById('file-name').textContent;
-            if (operation === 'mindmap') {
-                return buildMindmapMessageHtml(markdown);
-
-            } else if (operation === 'mcqs') {
-                const parsed = parseJsonContent(markdown);
-                if (!parsed) {
-                    if (!isFinal) {
-                        return renderQuestionLoadingHtml();
-                    }
-                    return renderStructuredFallback(markdown, 'JSON 输出不完整或格式错误，无法渲染题目。');
-                }
-                const quizHtml = buildQuizHtml(parsed.data, currentFileName, 'mcq', isFinal);
-                return quizHtml;
-            } else if (operation === 'tf') {
-                const parsed = parseJsonContent(markdown);
-                if (!parsed) {
-                    if (!isFinal) {
-                        return renderQuestionLoadingHtml();
-                    }
-                    return renderStructuredFallback(markdown, 'JSON 输出不完整或格式错误，无法渲染题目。');
-                }
-                const quizHtml = buildQuizHtml(parsed.data, currentFileName, 'tf', isFinal);
-                return quizHtml;
-            } else if (operation === 'questions') {
-                const parsed = parseJsonContent(markdown);
-                if (!parsed) {
-                    if (!isFinal) {
-                        return renderQuestionLoadingHtml();
-                    }
-                    return renderStructuredFallback(markdown, 'JSON 输出不完整或格式错误，无法渲染题目。');
-                }
-                const questionHtml = buildQuestionListHtml(parsed.data, currentFileName, isFinal);
-                return questionHtml;
-            } else if (operation === 'structure') {
-                const parsed = parseJsonContent(markdown);
-                if (parsed && parsed.data && parsed.data.syntax_tree) {
-                    const div = document.createElement('div');
-                    div.id = 'syntaxTree';
-                    div.className = "tree";
-                    createTree(parsed.data.syntax_tree, div);
-                    return div.outerHTML;
-                }
-                if (!isFinal) {
-                    return renderQuestionLoadingHtml();
-                }
-                return renderStructuredFallback(markdown, 'JSON 输出格式错误，无法渲染语法树。');
-            } else {
-                return markdownToHtml1(markdown);
+            const renderer = operation ? operationRenderers.get(operation) : null;
+            if (renderer) {
+                return renderer(markdown, {
+                    currentFileName,
+                    isFinal
+                });
             }
+
+            if (operation && isStructuredStreamOperation(operation) && isFinal) {
+                return renderStructuredFallback(markdown, '结构化渲染模块尚未就绪，已展示原始内容。');
+            }
+
+            return markdownToHtml1(markdown);
         };
 
 
@@ -4199,84 +2341,90 @@
             return html;
         }
 
-        function createTree(node, parentElement, level = 0) {
-            const nodeElement = document.createElement('div');
-            nodeElement.className = `node ${node.type}`;
-            nodeElement.textContent = node.label;
-            nodeElement.setAttribute('data-type', g(node.type));
-
-            if (node.children && node.children.length > 0) {
-                nodeElement.classList.add('is-collapsible');
-            }
-
-            parentElement.appendChild(nodeElement);
-
-            if (node.children && node.children.length > 0) {
-                const childrenContainer = document.createElement('div');
-                childrenContainer.className = 'children';
-                parentElement.appendChild(childrenContainer);
-
-                // 初始状态下，非第一层节点默认折叠
-                if (level > 0) {
-                    childrenContainer.classList.add('is-collapsed');
-                    nodeElement.classList.add('is-collapsed');
-                }
-
-                node.children.forEach(child => {
-                    createTree(child, childrenContainer, level + 1);
-                });
-            }
-        }
-
-        function g(tag) {
-            tags = {
-                'sentence': '句子',
-                'subject': '主语',
-                'subject-clause': '主语从句',
-                'predicate': '谓语',
-                'object': '宾语',
-                'direct-object': '直接宾语',
-                'indirect-object': '间接宾语',
-                'object-clause': '宾语从句',
-                'subject-complement': '主语补语',
-                'object-complement': '宾语补语',
-                'predicative-clause': '补语从句',
-                'attributive': '定语',
-                'attributive-clause': '定语从句',
-                'appositive': '同位语',
-                'appositive-clause': '同位语从句',
-                'adverbial': '状语',
-                'adverbial-clause': '状语从句'
-            };
-            return (tag in tags) ? tags[tag] : tag;
-        }
-
-        function executeFunction() {
+        async function executeFunction() {
             const selectedValue = moreFuncsSelect.value;
+            if (!selectedValue) return;
 
-            switch (selectedValue) {
-                case 'annotate-vocab':
-                    toggleVocabAnnotation().catch((error) => {
-                        addSystemMessage(`词汇标注失败: ${error.message}`);
-                    }).finally(() => {
-                        moreFuncsSelect.value = '';
-                    });
-                    break;
-                case 'mindmap':
-                    gen_mindmap();
-                    moreFuncsSelect.value = '';
-                    break;
-                case 'qa':
-                    gen_qa();
-                    moreFuncsSelect.value = '';
-                    break;
-                case 'mcq':
-                    gen_mcq();
-                    moreFuncsSelect.value = '';
-                    break;
-                case 'tf':
-                    gen_tf();
-                    moreFuncsSelect.value = '';
-                    break;
+            try {
+                switch (selectedValue) {
+                    case 'annotate-vocab':
+                        await toggleVocabAnnotation();
+                        break;
+                    case 'mindmap':
+                        await gen_mindmap();
+                        break;
+                    case 'qa':
+                        await gen_qa();
+                        break;
+                    case 'mcq':
+                        await gen_mcq();
+                        break;
+                    case 'tf':
+                        await gen_tf();
+                        break;
+                }
+            } catch (error) {
+                const labels = {
+                    'annotate-vocab': '词汇标注',
+                    mindmap: '思维导图',
+                    qa: '全文问答题',
+                    mcq: '全文选择题',
+                    tf: '全文判断题'
+                };
+                addSystemMessage(`${labels[selectedValue] || '功能'}失败: ${error.message}`);
+            } finally {
+                moreFuncsSelect.value = '';
             }
         }
+
+        moreFuncsSelect.addEventListener('change', () => {
+            void executeFunction();
+        });
+
+        Object.assign(appApi, {
+            registerFeatureLoader,
+            loadFeatureModule,
+            registerOperationRenderer,
+            getCsrfToken,
+            checkAuthStatus,
+            fetchPromptFileList,
+            fetchPromptFileContent,
+            savePromptFileContent,
+            addSystemMessage,
+            getCurrentSelection: () => currentSelection,
+            getCurrentFileName: () => currentFileName,
+            getCurrentFileContent: () => currentFileContent,
+            hashString,
+            encodeStructuredData,
+            decodeStructuredData,
+            escapeHtml,
+            dom: {
+                fileList,
+                textContent,
+                moreFuncsSelect,
+                editPromptsBtn,
+                readAloudBtn,
+                voiceSelect,
+                speechRateInput,
+                speechVolumeInput,
+                speechPitchInput,
+                promptManagerModal,
+                closePromptManagerModalBtn,
+                promptListPanel,
+                promptListView,
+                promptEditorPanel,
+                promptEditorName,
+                promptEditorText,
+                promptEditorBackBtn,
+                promptEditorSaveBtn,
+                mindmapModal,
+                closeMindmapModalBtn,
+                mindmapModalTitle,
+                mindmapStatus,
+                mindmapToolbar,
+                mindmapStage,
+                mindmapZoomInBtn,
+                mindmapZoomOutBtn,
+                mindmapFullscreenBtn
+            }
+        });
