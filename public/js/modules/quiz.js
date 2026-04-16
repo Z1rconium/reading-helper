@@ -14,11 +14,34 @@ function extractFencedBlock(markdown, language) {
   return match ? match[1].trim() : '';
 }
 
+function extractGenericFencedJsonBlock(markdown) {
+  const source = String(markdown || '');
+  const fenceRegex = /```(?:[a-zA-Z0-9_-]+)?\s*([\s\S]*?)```/g;
+  let match;
+
+  while ((match = fenceRegex.exec(source)) !== null) {
+    const candidate = String(match[1] || '').trim();
+    if (!candidate || (!candidate.startsWith('{') && !candidate.startsWith('['))) {
+      continue;
+    }
+
+    const parsed = parseJsonWithRecovery(candidate);
+    if (parsed) {
+      return candidate;
+    }
+  }
+
+  return '';
+}
+
 function findBalancedJsonCandidate(text, startIndex) {
   const input = String(text || '');
   const openingChar = input[startIndex];
-  const closingChar = openingChar === '{' ? '}' : ']';
-  let depth = 0;
+  if (openingChar !== '{' && openingChar !== '[') {
+    return '';
+  }
+
+  const stack = [];
   let inString = false;
   let escaping = false;
 
@@ -41,21 +64,21 @@ function findBalancedJsonCandidate(text, startIndex) {
       continue;
     }
 
-    if (char === openingChar) {
-      depth += 1;
+    if (char === '{' || char === '[') {
+      stack.push(char);
       continue;
     }
 
-    if (char === closingChar) {
-      depth -= 1;
-      if (depth === 0) {
+    if (char === '}' || char === ']') {
+      const expectedOpeningChar = char === '}' ? '{' : '[';
+      if (stack[stack.length - 1] !== expectedOpeningChar) {
+        return '';
+      }
+
+      stack.pop();
+      if (stack.length === 0) {
         return input.slice(startIndex, i + 1).trim();
       }
-      continue;
-    }
-
-    if ((openingChar === '{' && char === ']') || (openingChar === '[' && char === '}')) {
-      return '';
     }
   }
 
@@ -113,6 +136,11 @@ function extractJsonPayload(markdown) {
   const fenced = extractFencedBlock(markdown, 'json');
   if (fenced) {
     return fenced;
+  }
+
+  const genericFenced = extractGenericFencedJsonBlock(markdown);
+  if (genericFenced) {
+    return genericFenced;
   }
 
   const trimmed = String(markdown || '').trim();
