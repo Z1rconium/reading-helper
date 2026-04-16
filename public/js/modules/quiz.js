@@ -91,6 +91,13 @@ function extractBalancedJsonPayload(markdown) {
     }
   }
 
+  for (const item of candidates) {
+    const syntaxTree = pickFirstDeepValue(item.data, ['syntax_tree', 'syntaxTree']);
+    if (syntaxTree && typeof syntaxTree === 'object') {
+      return item.json;
+    }
+  }
+
   return candidates[0]?.json || '';
 }
 
@@ -845,11 +852,12 @@ function renderQuestionList(markdown, context = {}) {
 
 function renderStructureTree(markdown, context = {}) {
   const parsed = parseJsonContent(markdown);
-  if (parsed?.data?.syntax_tree) {
+  const syntaxTree = pickFirstDeepValue(parsed?.data, ['syntax_tree', 'syntaxTree', 'tree']);
+  if (syntaxTree && typeof syntaxTree === 'object') {
     const div = document.createElement('div');
     div.id = 'syntaxTree';
     div.className = 'tree';
-    createTree(parsed.data.syntax_tree, div);
+    createTree(syntaxTree, div);
     return div.outerHTML;
   }
   if (!context.isFinal) {
