@@ -62,9 +62,10 @@ function findBalancedJsonCandidate(text, startIndex) {
   return '';
 }
 
-function extractBalancedJsonPayload(markdown) {
+function collectBalancedJsonCandidates(markdown) {
   const input = String(markdown || '');
   const candidates = [];
+  const seen = new Set();
 
   for (let i = 0; i < input.length; i += 1) {
     const char = input[i];
@@ -73,17 +74,24 @@ function extractBalancedJsonPayload(markdown) {
     }
 
     const candidate = findBalancedJsonCandidate(input, i);
-    if (!candidate) {
+    if (!candidate || seen.has(candidate)) {
       continue;
     }
 
     try {
       const parsed = JSON.parse(candidate);
       candidates.push({ json: candidate, data: parsed });
+      seen.add(candidate);
     } catch (error) {
       // Keep scanning for another candidate.
     }
   }
+
+  return candidates;
+}
+
+function extractBalancedJsonPayload(markdown) {
+  const candidates = collectBalancedJsonCandidates(markdown);
 
   for (const item of candidates) {
     if (item.data && item.data.questions && Array.isArray(item.data.questions)) {
@@ -850,9 +858,27 @@ function renderQuestionList(markdown, context = {}) {
   return buildQuestionListHtml(parsed.data, context.currentFileName, context.isFinal);
 }
 
-function renderStructureTree(markdown, context = {}) {
+function findSyntaxTreeCandidate(markdown) {
+  const syntaxTreeKeys = ['syntax_tree', 'syntaxTree', 'tree'];
   const parsed = parseJsonContent(markdown);
-  const syntaxTree = pickFirstDeepValue(parsed?.data, ['syntax_tree', 'syntaxTree', 'tree']);
+  const fromPrimaryPayload = pickFirstDeepValue(parsed?.data, syntaxTreeKeys);
+  if (fromPrimaryPayload && typeof fromPrimaryPayload === 'object') {
+    return fromPrimaryPayload;
+  }
+
+  const balancedCandidates = collectBalancedJsonCandidates(markdown);
+  for (const candidate of balancedCandidates) {
+    const fromCandidate = pickFirstDeepValue(candidate.data, syntaxTreeKeys);
+    if (fromCandidate && typeof fromCandidate === 'object') {
+      return fromCandidate;
+    }
+  }
+
+  return null;
+}
+
+function renderStructureTree(markdown, context = {}) {
+  const syntaxTree = findSyntaxTreeCandidate(markdown);
   if (syntaxTree && typeof syntaxTree === 'object') {
     const div = document.createElement('div');
     div.id = 'syntaxTree';
