@@ -25,6 +25,20 @@ function setup(app) {
       closePromptManager();
     }
   });
+  promptListView.addEventListener('click', async (event) => {
+    const button = event.target.closest('.prompt-list-item');
+    if (!button || !promptListView.contains(button)) return;
+
+    const fileName = button.dataset.fileName || button.textContent.trim();
+    if (!fileName) return;
+
+    try {
+      const content = await appRef.fetchPromptFileContent(fileName, true);
+      showPromptEditorPanel(fileName, content);
+    } catch (error) {
+      appRef.addSystemMessage(`读取提示词失败: ${error.message}`);
+    }
+  });
   promptEditorBackBtn.addEventListener('click', showPromptListPanel);
   promptEditorSaveBtn.addEventListener('click', async () => {
     if (!activePromptFileName) return;
@@ -71,33 +85,27 @@ function closePromptManager() {
 
 function renderPromptList() {
   const { promptListView } = appRef.dom;
-  promptListView.innerHTML = '';
 
   if (!promptFileList.length) {
     const empty = document.createElement('li');
     empty.className = 'prompt-empty';
     empty.textContent = '未找到提示词文件。';
-    promptListView.appendChild(empty);
+    promptListView.replaceChildren(empty);
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   promptFileList.forEach((fileName) => {
     const li = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'prompt-list-item';
+    button.dataset.fileName = fileName;
     button.textContent = fileName;
-    button.addEventListener('click', async () => {
-      try {
-        const content = await appRef.fetchPromptFileContent(fileName, true);
-        showPromptEditorPanel(fileName, content);
-      } catch (error) {
-        appRef.addSystemMessage(`读取提示词失败: ${error.message}`);
-      }
-    });
     li.appendChild(button);
-    promptListView.appendChild(li);
+    fragment.appendChild(li);
   });
+  promptListView.replaceChildren(fragment);
 }
 
 async function openPromptManager() {

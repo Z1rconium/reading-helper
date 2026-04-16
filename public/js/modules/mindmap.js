@@ -4,7 +4,10 @@ let markmapLoadPromise = null;
 let markmapTransformer = null;
 let currentMindmapInstance = null;
 let currentMindmapData = null;
+let currentMindmapObserver = null;
+let pendingMindmapAnnotationFrame = 0;
 const mindmapCache = new Map();
+const pendingMindmapAnnotationRoots = new Set();
 
 const MINDMAP_BRANCH_COLORS = ['#5B8FF9', '#5AD8A6', '#5D7092', '#F6BD16', '#E86452', '#6DC8EC', '#945FB9', '#FF9845'];
 const MINDMAP_BASE_TEXT_COLOR = '#3A2D22';
@@ -221,10 +224,40 @@ function getMindmapGlobalStyle() {
       --markmap-font: 520 14px/1.45 ${MINDMAP_FONT_FAMILY};
       --markmap-text-color: ${MINDMAP_BASE_TEXT_COLOR};
     }
-    .markmap .markmap-foreign,
-    .markmap .markmap-foreign > div,
-    .markmap .markmap-foreign > div > div {
-      font-family: ${MINDMAP_FONT_FAMILY};
+    .rh-mindmap-graph .rh-mindmap-node {
+      --rh-mindmap-branch-color: ${MINDMAP_BRANCH_COLORS[0]};
+      --rh-mindmap-circle-fill: #FFFFFF;
+      --rh-mindmap-circle-stroke-width: 1.75;
+      --rh-mindmap-text-color: ${MINDMAP_BASE_TEXT_COLOR};
+      --rh-mindmap-font-size: 14px;
+      --rh-mindmap-font-weight: 520;
+      --rh-mindmap-letter-spacing: 0;
+    }
+    .rh-mindmap-graph .rh-mindmap-node line {
+      stroke: var(--rh-mindmap-branch-color);
+    }
+    .rh-mindmap-graph .rh-mindmap-node circle {
+      stroke: var(--rh-mindmap-branch-color);
+      stroke-width: var(--rh-mindmap-circle-stroke-width);
+      fill: var(--rh-mindmap-circle-fill);
+    }
+    .rh-mindmap-graph .rh-mindmap-node .markmap-foreign,
+    .rh-mindmap-graph .rh-mindmap-node .markmap-foreign > div,
+    .rh-mindmap-graph .rh-mindmap-node .markmap-foreign > div > div {
+      color: var(--rh-mindmap-text-color) !important;
+      font-family: ${MINDMAP_FONT_FAMILY} !important;
+      font-size: var(--rh-mindmap-font-size) !important;
+      font-weight: var(--rh-mindmap-font-weight) !important;
+      letter-spacing: var(--rh-mindmap-letter-spacing) !important;
+    }
+    .rh-mindmap-graph .rh-mindmap-node .markmap-foreign *,
+    .rh-mindmap-graph .rh-mindmap-node .markmap-foreign > div *,
+    .rh-mindmap-graph .rh-mindmap-node .markmap-foreign > div > div * {
+      color: inherit !important;
+      font-family: inherit !important;
+      font-size: inherit !important;
+      font-weight: inherit !important;
+      letter-spacing: inherit !important;
     }
   `;
 }
@@ -259,48 +292,102 @@ function getMindmapTextStyle(depth, branchColor) {
   };
 }
 
-function applyMindmapLabelTextStyles(label, textStyle) {
-  if (!label || !textStyle) return;
-  label.style.setProperty('color', textStyle.color, 'important');
-  label.style.setProperty('font-family', textStyle.fontFamily, 'important');
-  label.style.setProperty('font-size', textStyle.fontSize, 'important');
-  label.style.setProperty('font-weight', textStyle.fontWeight, 'important');
-  label.style.setProperty('letter-spacing', textStyle.letterSpacing, 'important');
+function applyMindmapNodeTheme(nodeElement) {
+  if (!(nodeElement instanceof Element) || !nodeElement.matches('g.markmap-node')) {
+    return;
+  }
+
+  const nodeData = nodeElement.__data__ || { dataset: nodeElement.dataset };
+  const depth = getMindmapNodeDepth(nodeData);
+  const branchColor = getMindmapBranchColor(nodeData);
+  const themeKey = `${depth}:${branchColor}`;
+  const textStyle = getMindmapTextStyle(depth, branchColor);
+
+  if (nodeElement.dataset.rhMindmapTheme === themeKey) {
+    return;
+  }
+
+  nodeElement.classList.add('rh-mindmap-node');
+  nodeElement.dataset.rhMindmapTheme = themeKey;
+  nodeElement.style.setProperty('--rh-mindmap-branch-color', branchColor);
+  nodeElement.style.setProperty('--rh-mindmap-circle-fill', depth <= 1 ? MINDMAP_ROOT_FILL : '#FFFFFF');
+  nodeElement.style.setProperty('--rh-mindmap-circle-stroke-width', depth <= 1 ? '2.25' : '1.75');
+  nodeElement.style.setProperty('--rh-mindmap-text-color', textStyle.color);
+  nodeElement.style.setProperty('--rh-mindmap-font-size', textStyle.fontSize);
+  nodeElement.style.setProperty('--rh-mindmap-font-weight', textStyle.fontWeight);
+  nodeElement.style.setProperty('--rh-mindmap-letter-spacing', textStyle.letterSpacing);
 }
 
-function applyMindmapVisualStyles() {
-  const nodes = appRef.dom.mindmapStage.querySelectorAll('g.markmap-node');
-  nodes.forEach((nodeElement) => {
-    const nodeData = nodeElement.__data__ || { dataset: nodeElement.dataset };
-    const depth = getMindmapNodeDepth(nodeData);
-    const branchColor = getMindmapBranchColor(nodeData);
-    const circle = nodeElement.querySelector('circle');
-    const line = nodeElement.querySelector('line');
-    const label = nodeElement.querySelector('foreignObject div div') || nodeElement.querySelector('foreignObject div');
+function annotateMindmapNodes(rootElement) {
+  if (!(rootElement instanceof Element)) {
+    return;
+  }
 
-    if (line) {
-      line.setAttribute('stroke', branchColor);
-    }
+  if (rootElement.matches('g.markmap-node')) {
+    applyMindmapNodeTheme(rootElement);
+  }
 
-    if (circle) {
-      circle.setAttribute('stroke', branchColor);
-      circle.setAttribute('stroke-width', depth <= 1 ? '2.25' : '1.75');
-      circle.setAttribute('fill', depth <= 1 ? MINDMAP_ROOT_FILL : '#FFFFFF');
-    }
-
-    if (label) {
-      const textStyle = getMindmapTextStyle(depth, branchColor);
-      applyMindmapLabelTextStyles(label, textStyle);
-      label.querySelectorAll('*').forEach((child) => {
-        applyMindmapLabelTextStyles(child, textStyle);
-      });
-    }
+  rootElement.querySelectorAll('g.markmap-node').forEach((nodeElement) => {
+    applyMindmapNodeTheme(nodeElement);
   });
 }
 
-function scheduleMindmapVisualStyles() {
-  applyMindmapVisualStyles();
-  requestAnimationFrame(() => applyMindmapVisualStyles());
+function flushPendingMindmapAnnotations() {
+  pendingMindmapAnnotationFrame = 0;
+  const roots = Array.from(pendingMindmapAnnotationRoots);
+  pendingMindmapAnnotationRoots.clear();
+  roots.forEach((rootElement) => annotateMindmapNodes(rootElement));
+}
+
+function queueMindmapAnnotation(rootElement) {
+  if (!(rootElement instanceof Element)) {
+    return;
+  }
+
+  pendingMindmapAnnotationRoots.add(rootElement);
+  if (pendingMindmapAnnotationFrame) {
+    return;
+  }
+
+  pendingMindmapAnnotationFrame = window.requestAnimationFrame(() => {
+    flushPendingMindmapAnnotations();
+  });
+}
+
+function disconnectMindmapObserver() {
+  if (currentMindmapObserver) {
+    currentMindmapObserver.disconnect();
+    currentMindmapObserver = null;
+  }
+
+  if (pendingMindmapAnnotationFrame) {
+    window.cancelAnimationFrame(pendingMindmapAnnotationFrame);
+    pendingMindmapAnnotationFrame = 0;
+  }
+
+  pendingMindmapAnnotationRoots.clear();
+}
+
+function observeMindmapMutations(svg) {
+  disconnectMindmapObserver();
+  if (!(svg instanceof Element) || typeof MutationObserver !== 'function') {
+    return;
+  }
+
+  queueMindmapAnnotation(svg);
+  currentMindmapObserver = new MutationObserver((mutations) => {
+    mutations.forEach(({ addedNodes }) => {
+      addedNodes.forEach((node) => {
+        if (node instanceof Element) {
+          queueMindmapAnnotation(node);
+        }
+      });
+    });
+  });
+  currentMindmapObserver.observe(svg, {
+    childList: true,
+    subtree: true
+  });
 }
 
 function getMindmapRenderOptions() {
@@ -333,15 +420,14 @@ function stabilizeMindmapToggleZoom(instance, svg) {
     const beforeTransform = getMindmapZoomTransform(svg);
     const result = await originalToggleNode(...args);
     const transitionDuration = Number(instance.options?.duration) || 0;
-    const restoreMindmapState = () => {
-      scheduleMindmapVisualStyles();
+    const restoreMindmapZoom = () => {
       if (beforeTransform) {
         applyMindmapZoomTransform(instance, svg, beforeTransform);
       }
     };
 
-    requestAnimationFrame(restoreMindmapState);
-    window.setTimeout(restoreMindmapState, transitionDuration + 24);
+    requestAnimationFrame(restoreMindmapZoom);
+    window.setTimeout(restoreMindmapZoom, transitionDuration + 24);
     return result;
   };
 
@@ -360,6 +446,7 @@ async function renderMindmap(markdown, precomputedRoot = null) {
   const root = precomputedRoot || markmapTransformer.transform(content).root;
 
   const { mindmapStage, mindmapToolbar } = appRef.dom;
+  disconnectMindmapObserver();
   mindmapStage.innerHTML = '';
 
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -369,6 +456,7 @@ async function renderMindmap(markdown, precomputedRoot = null) {
   svg.setAttribute('height', String(height));
   svg.style.width = '100%';
   svg.style.height = '100%';
+  svg.classList.add('rh-mindmap-graph');
   mindmapStage.appendChild(svg);
 
   currentMindmapInstance = stabilizeMindmapToggleZoom(
@@ -376,12 +464,13 @@ async function renderMindmap(markdown, precomputedRoot = null) {
     svg
   );
   currentMindmapData = content;
-  scheduleMindmapVisualStyles();
+  observeMindmapMutations(svg);
   mindmapToolbar.style.display = 'flex';
 }
 
 function closeMindmapModal() {
   const { mindmapModal, mindmapStage, mindmapStatus, mindmapToolbar } = appRef.dom;
+  disconnectMindmapObserver();
   mindmapModal.style.display = 'none';
   mindmapStage.innerHTML = '';
   mindmapStatus.textContent = '';

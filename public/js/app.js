@@ -991,7 +991,7 @@
         }
 
         function clearChatPanel() {
-            chatMessages.innerHTML = '';
+            chatMessages.replaceChildren();
         }
 
         function highlightCurrentFile() {
@@ -1044,7 +1044,7 @@
         }
 
         function renderConversationMessages(interactions) {
-            clearChatPanel();
+            const fragment = document.createDocumentFragment();
             (Array.isArray(interactions) ? interactions : []).forEach((interaction) => {
                 if (!interaction || !interaction.content) return;
 
@@ -1058,8 +1058,9 @@
                 } else {
                     return;
                 }
-                chatMessages.appendChild(messageElement);
+                fragment.appendChild(messageElement);
             });
+            chatMessages.replaceChildren(fragment);
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
@@ -1097,12 +1098,12 @@
         }
 
         function renderChatHistoryList(conversations) {
-            chatHistoryList.innerHTML = '';
+            const fragment = document.createDocumentFragment();
             if (!Array.isArray(conversations) || conversations.length === 0) {
                 const emptyNode = document.createElement('li');
                 emptyNode.className = 'chat-history-empty';
                 emptyNode.textContent = '该文章暂无历史记录。';
-                chatHistoryList.appendChild(emptyNode);
+                chatHistoryList.replaceChildren(emptyNode);
                 return;
             }
 
@@ -1123,12 +1124,11 @@
 
                 button.appendChild(title);
                 button.appendChild(meta);
-                button.addEventListener('click', async () => {
-                    await loadConversationById(conversation.id);
-                });
                 li.appendChild(button);
-                chatHistoryList.appendChild(li);
+                fragment.appendChild(li);
             });
+
+            chatHistoryList.replaceChildren(fragment);
         }
 
         async function openChatHistory() {
@@ -1431,6 +1431,12 @@
             hideFileContextMenu();
             await loadHistory(li.dataset.fileName);
         });
+        chatHistoryList.addEventListener('click', async (event) => {
+            const item = event.target.closest('.chat-history-item');
+            if (!item || !chatHistoryList.contains(item)) return;
+            hideChatHistoryContextMenu();
+            await loadConversationById(item.dataset.conversationId);
+        });
 
         function updateFileList() {
             hideFileContextMenu();
@@ -1442,13 +1448,14 @@
                 return;
             }
 
-            fileList.innerHTML = '';
+            const fragment = document.createDocumentFragment();
             names.forEach((fileName) => {
                 const li = document.createElement('li');
                 li.textContent = fileName;
                 li.dataset.fileName = fileName;
-                fileList.appendChild(li);
+                fragment.appendChild(li);
             });
+            fileList.replaceChildren(fragment);
 
             highlightCurrentFile();
         }
