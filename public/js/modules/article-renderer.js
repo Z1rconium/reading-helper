@@ -2,50 +2,123 @@ let appRef = null;
 let isVocabAnnotationEnabled = false;
 let cetWordLevelMap = null;
 let cetWordListPromise = null;
+let articleCache = {
+  content: '',
+  paragraphs: []
+};
 
 function setup(app) {
   appRef = app;
 }
 
-function buildArticleParagraphHtml(line, levelMap = null) {
-  const normalizedLine = String(line || '').trim().split(/\s+/).join(' ');
-  if (!normalizedLine) return '';
+function normalizeParagraphText(line) {
+  return String(line || '').trim().split(/\s+/).join(' ');
+}
 
-  if (!(levelMap instanceof Map) || levelMap.size === 0) {
-    return `<p>${appRef.escapeHtml(normalizedLine)}</p>`;
-  }
-
-  let html = '';
-  let lastIndex = 0;
+function tokenizeParagraph(text) {
+  const tokens = [];
   const wordPattern = /[A-Za-z]+/g;
-  let match = wordPattern.exec(normalizedLine);
+  let lastIndex = 0;
+  let match = wordPattern.exec(text);
 
   while (match) {
     const [word] = match;
     const offset = match.index;
-    html += appRef.escapeHtml(normalizedLine.slice(lastIndex, offset));
-
-    const level = levelMap.get(word.toLowerCase());
-    if (level === 4 || level === 6) {
-      html += `<span class="cet-word cet-${level}">${appRef.escapeHtml(word)}</span>`;
-    } else {
-      html += appRef.escapeHtml(word);
+    if (offset > lastIndex) {
+      tokens.push({ type: 'text', value: text.slice(lastIndex, offset) });
     }
 
+    tokens.push({ type: 'word', value: word, lower: word.toLowerCase() });
     lastIndex = offset + word.length;
-    match = wordPattern.exec(normalizedLine);
+    match = wordPattern.exec(text);
   }
 
-  html += appRef.escapeHtml(normalizedLine.slice(lastIndex));
-  return `<p>${html}</p>`;
+  if (lastIndex < text.length) {
+    tokens.push({ type: 'text', value: text.slice(lastIndex) });
+  }
+
+  return tokens;
+}
+
+function parseArticleParagraphs(content) {
+  return String(content || '')
+    .split(/\r?\n/)
+    .map(normalizeParagraphText)
+    .filter(Boolean)
+    .map((text) => ({
+      text,
+      tokens: tokenizeParagraph(text),
+      plainNode: null,
+      annotatedNode: null
+    }));
+}
+
+function ensureArticleCache(content) {
+  const nextContent = String(content || '');
+  if (articleCache.content !== nextContent) {
+    articleCache = {
+      content: nextContent,
+      paragraphs: parseArticleParagraphs(nextContent)
+    };
+  }
+  return articleCache;
+}
+
+function buildParagraphNode(paragraph, levelMap = null) {
+  const node = document.createElement('p');
+
+  if (!(levelMap instanceof Map) || levelMap.size === 0) {
+    node.textContent = paragraph.text;
+    return node;
+  }
+
+  paragraph.tokens.forEach((token) => {
+    if (token.type !== 'word') {
+      node.appendChild(document.createTextNode(token.value));
+      return;
+    }
+
+    const level = levelMap.get(token.lower);
+    if (level === 4 || level === 6) {
+      const wordNode = document.createElement('span');
+      wordNode.className = `cet-word cet-${level}`;
+      wordNode.textContent = token.value;
+      node.appendChild(wordNode);
+      return;
+    }
+
+    node.appendChild(document.createTextNode(token.value));
+  });
+
+  return node;
+}
+
+function getParagraphNode(paragraph, annotated) {
+  const cacheKey = annotated ? 'annotatedNode' : 'plainNode';
+  if (!paragraph[cacheKey]) {
+    paragraph[cacheKey] = buildParagraphNode(paragraph, annotated ? cetWordLevelMap : null);
+  }
+  return paragraph[cacheKey].cloneNode(true);
+}
+
+function buildArticleFragment(paragraphs, annotated) {
+  const fragment = document.createDocumentFragment();
+  paragraphs.forEach((paragraph) => {
+    fragment.appendChild(getParagraphNode(paragraph, annotated));
+  });
+  return fragment;
+}
+
+function invalidateAnnotatedParagraphCache() {
+  articleCache.paragraphs.forEach((paragraph) => {
+    paragraph.annotatedNode = null;
+  });
 }
 
 function renderArticleContent(content) {
-  const levelMap = isVocabAnnotationEnabled ? cetWordLevelMap : null;
-  appRef.dom.textContent.innerHTML = String(content || '')
-    .split('\n')
-    .map((line) => buildArticleParagraphHtml(line, levelMap))
-    .join('');
+  const { paragraphs } = ensureArticleCache(content);
+  const shouldAnnotate = isVocabAnnotationEnabled && cetWordLevelMap instanceof Map && cetWordLevelMap.size > 0;
+  appRef.dom.textContent.replaceChildren(buildArticleFragment(paragraphs, shouldAnnotate));
 }
 
 function parseCetWordList(content) {
@@ -104,6 +177,7 @@ async function fetchCetWordList() {
 
       const data = await response.json();
       cetWordLevelMap = parseCetWordList(data?.content || '');
+      invalidateAnnotatedParagraphCache();
       return cetWordLevelMap;
     })().catch((error) => {
       cetWordListPromise = null;
@@ -116,6 +190,10 @@ async function fetchCetWordList() {
 
 function resetState() {
   isVocabAnnotationEnabled = false;
+  articleCache = {
+    content: '',
+    paragraphs: []
+  };
 }
 
 async function toggleVocabAnnotation() {

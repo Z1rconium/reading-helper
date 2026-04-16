@@ -420,7 +420,7 @@
         }
 
         function getArticleContextText() {
-            const articleText = String(currentFileContent || '').trim();
+            const articleText = getCurrentArticleContent();
             if (!articleText) return '';
             if (articleText.length <= MAX_ARTICLE_CONTEXT_CHARS) {
                 return articleText;
@@ -963,12 +963,26 @@
             });
         }
 
-        function renderPlainArticleContent(content) {
-            textContent.innerHTML = String(content || '')
+        function getCurrentArticleContent() {
+            return String(currentFileContent || '').trim();
+        }
+
+        function buildPlainArticleFragment(content) {
+            const fragment = document.createDocumentFragment();
+            String(content || '')
                 .split('\n\n')
-                .map((paragraph) => `<p>${escapeHtml(String(paragraph || '').trim())}</p>`)
+                .map((paragraph) => String(paragraph || '').trim())
                 .filter(Boolean)
-                .join('');
+                .forEach((paragraph) => {
+                    const node = document.createElement('p');
+                    node.textContent = paragraph;
+                    fragment.appendChild(node);
+                });
+            return fragment;
+        }
+
+        function renderPlainArticleContent(content) {
+            textContent.replaceChildren(buildPlainArticleFragment(content));
         }
 
         async function renderArticleContent(content) {
@@ -1652,7 +1666,7 @@
 
         //文章思维导图
         async function gen_mindmap() {
-            const passageContent = textContent.innerText.trim();
+            const passageContent = getCurrentArticleContent();
             if (!passageContent) return;
             resetSummaryEvaluationState();
             addUserMessage('请生成文章思维导图');
@@ -1671,7 +1685,7 @@
         }
 
         async function gen_qa() {
-            const passageContent = textContent.innerText.trim();
+            const passageContent = getCurrentArticleContent();
             if (!passageContent) return;
             resetSummaryEvaluationState();
             addUserMessage('请生成10个开放性问题');
@@ -1695,7 +1709,7 @@
         }
 
         async function gen_mcq() {
-            const passageContent = textContent.innerText.trim();
+            const passageContent = getCurrentArticleContent();
             if (!passageContent) return;
             resetSummaryEvaluationState();
             addUserMessage('请生成10个多项选择题');
@@ -1719,7 +1733,7 @@
         }
 
         async function gen_tf() {
-            const passageContent = textContent.innerText.trim();
+            const passageContent = getCurrentArticleContent();
             if (!passageContent) return;
             resetSummaryEvaluationState();
             addUserMessage('请生成10个正误判断题');

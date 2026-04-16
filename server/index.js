@@ -463,6 +463,13 @@ async function bootstrap() {
     next();
   });
 
+  function hasVersionedAssetRequest(req) {
+    const originalUrl = String(req?.originalUrl || '');
+    const queryIndex = originalUrl.indexOf('?');
+    if (queryIndex === -1) return false;
+    return /(?:^|&)v=/.test(originalUrl.slice(queryIndex + 1));
+  }
+
   // Static files - serve before session middleware to avoid unnecessary session lookups
   app.use(express.static(path.join(process.cwd(), 'public'), {
     maxAge: process.env.NODE_ENV === 'production' ? '1y' : '1d',
@@ -470,7 +477,11 @@ async function bootstrap() {
     lastModified: true,
     setHeaders: (res, filePath) => {
       if (filePath.endsWith('.css') || filePath.endsWith('.js')) {
-        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+        if (process.env.NODE_ENV === 'production' && hasVersionedAssetRequest(res.req)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+        }
       }
       else if (filePath.match(/\.(jpg|jpeg|png|gif|svg|ico|webp)$/)) {
         res.setHeader('Cache-Control', 'public, max-age=604800');
