@@ -1,6 +1,5 @@
 const crypto = require('crypto');
 const path = require('path');
-const sanitizeHtml = require('sanitize-html');
 const {
   listConversationIds,
   listConversationSummaries,
@@ -24,19 +23,6 @@ const MAX_CONVERSATION_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 200000;
 const MAX_TITLE_LENGTH = 24;
 const MAX_PREVIEW_LENGTH = 120;
-const SANITIZE_ALLOWED_TAGS = [
-  'p', 'br', 'strong', 'em', 'code', 'pre', 'blockquote',
-  'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr',
-  'div', 'span', 'button', 'a'
-];
-const SANITIZE_ALLOWED_ATTRIBUTES = {
-  '*': ['class'],
-  div: ['data-markdown', 'data-type', 'data-correct-answer'],
-  span: ['data-type'],
-  button: ['type', 'data-option'],
-  a: ['href', 'target', 'rel']
-};
 
 function createChatStoreError(message, code) {
   const error = new Error(message);
@@ -83,25 +69,6 @@ function normalizeTimestamp(value, fallback) {
   return date.toISOString();
 }
 
-function sanitizeAssistantHtml(content) {
-  return sanitizeHtml(String(content || ''), {
-    allowedTags: SANITIZE_ALLOWED_TAGS,
-    allowedAttributes: SANITIZE_ALLOWED_ATTRIBUTES,
-    allowedSchemes: ['http', 'https', 'mailto'],
-    disallowedTagsMode: 'discard'
-  });
-}
-
-function sanitizeInteraction(interaction) {
-  if (!interaction || typeof interaction !== 'object') return interaction;
-  if (interaction.role !== 'assistant') return interaction;
-
-  return {
-    ...interaction,
-    content: sanitizeAssistantHtml(interaction.content)
-  };
-}
-
 function stripHtml(content) {
   return String(content || '')
     .replace(/<[^>]+>/g, ' ')
@@ -144,7 +111,7 @@ function normalizeInteraction(interaction) {
 
   return {
     role,
-    content: role === 'assistant' ? sanitizeAssistantHtml(content) : content,
+    content,
     timestamp: normalizeTimestamp(interaction.timestamp, new Date().toISOString())
   };
 }
@@ -231,7 +198,7 @@ async function getConversation(userId, articleName, conversationId) {
     id: conversation.id,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
-    interactions: conversation.interactions.map(sanitizeInteraction)
+    interactions: Array.isArray(conversation.interactions) ? conversation.interactions : []
   };
 }
 
@@ -256,9 +223,7 @@ async function appendConversationMessage(userId, articleName, conversationId, ro
 
   const interaction = {
     role: normalizedRole,
-    content: normalizedRole === 'assistant'
-      ? sanitizeAssistantHtml(normalizedContent)
-      : normalizedContent,
+    content: normalizedContent,
     timestamp: normalizeTimestamp(timestamp, new Date().toISOString())
   };
 

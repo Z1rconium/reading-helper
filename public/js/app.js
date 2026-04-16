@@ -225,6 +225,7 @@
         let turnstileToken = '';
         const serverFiles = new Set();
         let serverFileNames = [];
+        let renderedFileNames = [];
         const fileNameCollator = new Intl.Collator('zh-CN');
         const defaultTextContentHtml = '<p>请上传一个文本文件。</p><p>您可以选择单词、句子或段落，然后在右侧与AI助手交互。</p>';
         let contextMenuFileName = '';
@@ -250,8 +251,18 @@
         const MAX_ARTICLE_CONTEXT_CHARS = 12000;
         const HEARTBEAT_FOREGROUND_MS = 4 * 60 * 1000;
         const HEARTBEAT_BACKGROUND_MS = 10 * 60 * 1000;
+        const DEFAULT_PREFERENCES = Object.freeze({
+            speechRate: 0.9,
+            speechVolume: 1.0,
+            speechPitch: 1.0
+        });
+        const PREFERENCE_SAVE_DELAY_MS = 500;
         let heartbeatTimerId = 0;
         let heartbeatInFlight = false;
+        let preferenceSaveTimerId = 0;
+        let pendingPreferences = null;
+        let preferenceSavePromise = null;
+        let lastSavedPreferences = { ...DEFAULT_PREFERENCES };
 
         function clearServerFiles() {
             serverFiles.clear();
@@ -289,20 +300,149 @@
             }
 
             serverFiles.delete(fileName);
-            serverFileNames = serverFileNames.filter((name) => name !== fileName);
+            const index = serverFileNames.indexOf(fileName);
+            if (index !== -1) {
+                serverFileNames.splice(index, 1);
+            }
         }
 
-        // Utility: Debounce function
-        function debounce(func, wait) {
-            let timeout;
-            return function executedFunction(...args) {
-                const later = () => {
-                    clearTimeout(timeout);
-                    func(...args);
-                };
-                clearTimeout(timeout);
-                timeout = setTimeout(later, wait);
+        function normalizePreferenceValue(value, fallback) {
+            const parsed = Number.parseFloat(value);
+            return Number.isFinite(parsed) ? parsed : fallback;
+        }
+
+        function getCurrentPreferencesSnapshot() {
+            return {
+                speechRate: normalizePreferenceValue(speechRateInput.value, DEFAULT_PREFERENCES.speechRate),
+                speechVolume: normalizePreferenceValue(speechVolumeInput.value, DEFAULT_PREFERENCES.speechVolume),
+                speechPitch: normalizePreferenceValue(speechPitchInput.value, DEFAULT_PREFERENCES.speechPitch)
             };
+        }
+
+        function applyPreferencesToInputs(preferences) {
+            const nextPreferences = preferences || DEFAULT_PREFERENCES;
+            speechRateInput.value = String(nextPreferences.speechRate);
+            speechVolumeInput.value = String(nextPreferences.speechVolume);
+            speechPitchInput.value = String(nextPreferences.speechPitch);
+        }
+
+        function arePreferencesEqual(left, right) {
+            return left.speechRate === right.speechRate
+                && left.speechVolume === right.speechVolume
+                && left.speechPitch === right.speechPitch;
+        }
+
+        function clearPendingPreferenceSave() {
+            if (!preferenceSaveTimerId) {
+                return;
+            }
+            window.clearTimeout(preferenceSaveTimerId);
+            preferenceSaveTimerId = 0;
+        }
+
+        function schedulePreferencesSave() {
+            clearPendingPreferenceSave();
+            preferenceSaveTimerId = window.setTimeout(() => {
+                preferenceSaveTimerId = 0;
+                void savePreferences();
+            }, PREFERENCE_SAVE_DELAY_MS);
+        }
+
+        async function flushPreferencesSave() {
+            clearPendingPreferenceSave();
+            await savePreferences();
+        }
+
+        function haveSameFileNames(left, right) {
+            if (left.length !== right.length) {
+                return false;
+            }
+            for (let index = 0; index < left.length; index += 1) {
+                if (left[index] !== right[index]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        async function persistPendingPreferences() {
+            if (preferenceSavePromise) {
+                await preferenceSavePromise;
+                return;
+            }
+
+            preferenceSavePromise = (async () => {
+                while (pendingPreferences) {
+                    const preferenceOwner = currentUserId;
+                    if (!preferenceOwner) {
+                        pendingPreferences = null;
+                        return;
+                    }
+
+                    const nextPreferences = pendingPreferences;
+                    pendingPreferences = null;
+
+                    if (arePreferencesEqual(nextPreferences, lastSavedPreferences)) {
+                        continue;
+                    }
+
+                    const response = await fetch('/api/preferences', {
+                        method: 'PUT',
+                        credentials: 'include',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-Token': getCsrfToken()
+                        },
+                        body: JSON.stringify({ userId: preferenceOwner, ...nextPreferences })
+                    });
+
+                    if (response.status === 401) {
+                        await checkAuthStatus();
+                        throw new Error('请先登录后再保存偏好');
+                    }
+                    if (!response.ok) {
+                        throw new Error(`保存偏好失败: ${response.status}`);
+                    }
+
+                    const savedPreferences = await response.json();
+                    if (currentUserId !== preferenceOwner) {
+                        continue;
+                    }
+                    lastSavedPreferences = {
+                        speechRate: normalizePreferenceValue(savedPreferences.speechRate, nextPreferences.speechRate),
+                        speechVolume: normalizePreferenceValue(savedPreferences.speechVolume, nextPreferences.speechVolume),
+                        speechPitch: normalizePreferenceValue(savedPreferences.speechPitch, nextPreferences.speechPitch)
+                    };
+                }
+            })();
+
+            try {
+                await preferenceSavePromise;
+            } finally {
+                preferenceSavePromise = null;
+            }
+
+            if (pendingPreferences && !arePreferencesEqual(pendingPreferences, lastSavedPreferences)) {
+                await persistPendingPreferences();
+            }
+        }
+
+        function resetPreferenceState() {
+            clearPendingPreferenceSave();
+            pendingPreferences = null;
+            preferenceSavePromise = null;
+            lastSavedPreferences = { ...DEFAULT_PREFERENCES };
+            applyPreferencesToInputs(DEFAULT_PREFERENCES);
+        }
+
+        async function queuePreferencesSave(preferences) {
+            pendingPreferences = preferences;
+            await persistPendingPreferences();
+        }
+
+        function attachPreferenceInputListeners(input) {
+            input.addEventListener('input', schedulePreferencesSave);
+            input.addEventListener('change', schedulePreferencesSave);
         }
 
         // Utility: Simple hash function for caching
@@ -493,6 +633,7 @@
                     }
                 } else {
                     clearServerFiles();
+                    resetPreferenceState();
                     updateFileList();
                     showAuthModal();
                     stopHeartbeat();
@@ -506,6 +647,7 @@
             } catch (error) {
                 resetPromptState();
                 clearServerFiles();
+                resetPreferenceState();
                 updateFileList();
                 currentUserId = '';
                 stopHeartbeat();
@@ -578,6 +720,10 @@
         async function logout() {
             stopHeartbeat();
             try {
+                await flushPreferencesSave();
+            } catch (error) {
+            }
+            try {
                 await fetch('/api/auth/logout', {
                     method: 'POST',
                     credentials: 'include',
@@ -600,6 +746,7 @@
             resetSummaryEvaluationState();
             logoutBtn.title = '退出';
             resetPromptState();
+            resetPreferenceState();
             fileNameDisplay.textContent = '未选择文件';
             textContent.innerHTML = defaultTextContentHtml;
             clearChatPanel();
@@ -1337,16 +1484,21 @@
 
         async function loadPreferences() {
             if (!currentUserId) return;
+            const requestedUserId = currentUserId;
             try {
-                const response = await fetch(`/api/preferences?userId=${encodeURIComponent(currentUserId)}`, {
+                const response = await fetch(`/api/preferences?userId=${encodeURIComponent(requestedUserId)}`, {
                     method: 'GET',
                     credentials: 'include'
                 });
-                if (response.ok) {
+                if (response.ok && currentUserId === requestedUserId) {
                     const prefs = await response.json();
-                    speechRateInput.value = prefs.speechRate || 0.9;
-                    speechVolumeInput.value = prefs.speechVolume || 1.0;
-                    speechPitchInput.value = prefs.speechPitch || 1.0;
+                    const normalizedPreferences = {
+                        speechRate: normalizePreferenceValue(prefs.speechRate, DEFAULT_PREFERENCES.speechRate),
+                        speechVolume: normalizePreferenceValue(prefs.speechVolume, DEFAULT_PREFERENCES.speechVolume),
+                        speechPitch: normalizePreferenceValue(prefs.speechPitch, DEFAULT_PREFERENCES.speechPitch)
+                    };
+                    applyPreferencesToInputs(normalizedPreferences);
+                    lastSavedPreferences = normalizedPreferences;
                 }
             } catch (error) {}
         }
@@ -1354,20 +1506,11 @@
         async function savePreferences() {
             if (!currentUserId) return;
             try {
-                const prefs = {
-                    speechRate: parseFloat(speechRateInput.value) || 0.9,
-                    speechVolume: parseFloat(speechVolumeInput.value) || 1.0,
-                    speechPitch: parseFloat(speechPitchInput.value) || 1.0
-                };
-                await fetch('/api/preferences', {
-                    method: 'PUT',
-                    credentials: 'include',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-Token': getCsrfToken()
-                    },
-                    body: JSON.stringify({ userId: currentUserId, ...prefs })
-                });
+                const preferences = getCurrentPreferencesSnapshot();
+                if (arePreferencesEqual(preferences, lastSavedPreferences)) {
+                    return;
+                }
+                await queuePreferencesSave(preferences);
             } catch (error) {}
         }
 
@@ -1385,17 +1528,21 @@
                 scheduleHeartbeat(0);
                 return;
             }
+            void flushPreferencesSave();
             scheduleHeartbeat(HEARTBEAT_BACKGROUND_MS);
         });
         window.addEventListener('online', () => {
             if (!currentUserId) return;
             scheduleHeartbeat(0);
         });
+        window.addEventListener('pagehide', () => {
+            if (!currentUserId) return;
+            void flushPreferencesSave();
+        });
 
-        const debouncedSavePreferences = debounce(savePreferences, 300);
-        speechRateInput.addEventListener('change', debouncedSavePreferences);
-        speechVolumeInput.addEventListener('change', debouncedSavePreferences);
-        speechPitchInput.addEventListener('change', debouncedSavePreferences);
+        attachPreferenceInputListeners(speechRateInput);
+        attachPreferenceInputListeners(speechVolumeInput);
+        attachPreferenceInputListeners(speechPitchInput);
 
         refreshFileListBtn.addEventListener('click', async () => {
             await fetchServerFileList();
@@ -1440,22 +1587,20 @@
 
         function updateFileList() {
             hideFileContextMenu();
-            const names = serverFileNames;
-            const currentNames = Array.from(fileList.querySelectorAll('li')).map(li => li.dataset.fileName);
-
-            if (JSON.stringify(names) === JSON.stringify(currentNames)) {
+            if (haveSameFileNames(serverFileNames, renderedFileNames)) {
                 highlightCurrentFile();
                 return;
             }
 
             const fragment = document.createDocumentFragment();
-            names.forEach((fileName) => {
+            serverFileNames.forEach((fileName) => {
                 const li = document.createElement('li');
                 li.textContent = fileName;
                 li.dataset.fileName = fileName;
                 fragment.appendChild(li);
             });
             fileList.replaceChildren(fragment);
+            renderedFileNames = serverFileNames.slice();
 
             highlightCurrentFile();
         }
@@ -1946,7 +2091,7 @@
             // 如果是Markdown内容，直接作为HTML插入
             if (message.includes('#')) {
                 const html = buildAssistantMessageHtml(message, null);
-                messageElement.innerHTML = html;
+                messageElement.innerHTML = sanitizeAssistantHtml(html);
                 saveInteraction('assistant', html).catch((error) => {
                     addSystemMessage(`保存对话失败: ${error.message}`);
                 });
@@ -2010,7 +2155,7 @@
         }
 
         function buildAssistantMessageHtml(message, operation, isFinal = false) {
-            return sanitizeAssistantHtml(markdownToHtml(message, operation, isFinal));
+            return markdownToHtml(message, operation, isFinal);
         }
 
         function ensureStreamContentHost(messageElement) {
@@ -2064,7 +2209,7 @@
 
         function renderAIResponse(messageElement, message, operation, isFinal = false) {
             const html = buildAssistantMessageHtml(message, operation, isFinal);
-            messageElement.innerHTML = html;
+            messageElement.innerHTML = sanitizeAssistantHtml(html);
             messageElement.classList.remove('loading');
             scheduleChatScrollToBottom();
             return html;
