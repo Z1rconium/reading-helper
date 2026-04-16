@@ -11,7 +11,7 @@ Reading Helper 是一个全栈 Web 应用，为英语学习者提供智能阅读
 - 👥 多用户数据完全隔离
 - 🤖 支持多种 AI 提供商（OpenAI、Anthropic、自定义 API）
 - 🩺 一键检查 AI API 连通性（错误码 + 安全文案 + 摘要）
-- 💬 对话历史持久化（每篇文章支持多个独立会话）
+- 💬 对话历史 SQLite 持久化（每篇文章支持多个独立会话，自动迁移旧数据）
 - 📝 可自定义系统提示词模板
 - 🎯 CET4/CET6 词汇智能高亮
 - 🔊 Edge TTS 语音朗读
@@ -25,6 +25,7 @@ Reading Helper 是一个全栈 Web 应用，为英语学习者提供智能阅读
 - **运行时**: Node.js ≥18
 - **框架**: Express.js
 - **会话存储**: Redis + connect-redis
+- **对话存储**: SQLite + better-sqlite3
 - **文件上传**: Multer
 - **HTML 清理**: sanitize-html
 - **压缩**: compression (Gzip/Brotli)
@@ -51,10 +52,10 @@ Reading Helper 是一个全栈 Web 应用，为英语学习者提供智能阅读
                    │
        ┌───────────┼───────────┐
        ▼           ▼           ▼
-┌──────────┐ ┌──────────┐ ┌──────────┐
-│ 文件管理  │ │ 提示词库  │ │ 对话存储  │
-│  .txt    │ │  .md     │ │  .json   │
-└──────────┘ └──────────┘ └──────────┘
+┌──────────┐ ┌──────────┐ ┌──────────────┐
+│ 文件管理  │ │ 提示词库  │ │ 对话存储      │
+│  .txt    │ │  .md     │ │ SQLite / WAL │
+└──────────┘ └──────────┘ └──────────────┘
        │           │           │
        └───────────┼───────────┘
                    ▼
@@ -73,13 +74,15 @@ Reading Helper 是一个全栈 Web 应用，为英语学习者提供智能阅读
 ```
 reading-helper/
 ├── server/                          # 后端服务
-│   ├── index.js                     # 主服务器 (1018 行)
+│   ├── index.js                     # 主服务器
 │   ├── config-loader.js             # 配置加载器
 │   ├── session-store.js             # Redis 会话存储
 │   ├── csrf-protection.js           # CSRF 防护
 │   ├── file-store.js                # 文件上传/管理
 │   ├── prompt-store.js              # 提示词模板管理
-│   ├── chat-store.js                # 对话历史持久化
+│   ├── chat-store.js                # 对话历史业务逻辑
+│   ├── chat-db.js                   # SQLite 对话存储
+│   ├── chat-migrate.js              # 旧版对话数据迁移
 │   ├── preferences-store.js         # 用户偏好设置
 │   ├── user-paths.js                # 用户路径计算
 │   └── cleanup-orphaned-users.js    # 孤立数据清理
@@ -101,7 +104,6 @@ reading-helper/
 │       │   ├── vocab.js             # CET 词汇高亮
 │       │   ├── speech.js            # 语音朗读
 │       │   └── mindmap.js           # 思维导图
-│       └── vendor/                   # 第三方库（D3.js, markmap）
 │
 ├── config/                          # 配置文件
 │   ├── platform.config.json         # 平台配置（会话密钥）
@@ -116,11 +118,14 @@ reading-helper/
 ├── data/users/                      # 用户数据目录
 │   └── <userId>/
 │       ├── uploads/                 # 上传的文章
-│       ├── chats/<articleBase64>/   # 对话历史
+│       ├── chats/chat.sqlite        # 对话历史 SQLite 数据库
+│       ├── chats/chat.sqlite-wal    # SQLite WAL 日志（运行时）
+│       ├── chats/chat.sqlite-shm    # SQLite 共享内存文件（运行时）
 │       ├── prompts/                 # 用户自定义提示词
 │       └── preferences.json         # 用户偏好设置
 │
 ├── ecosystem.config.js              # PM2 配置
+├── scripts/update-project.sh        # 拉取上游并保留本地配置
 └── package.json
 ```
 
@@ -161,8 +166,10 @@ reading-helper/
 
 ### 5. 对话历史管理
 - **多会话支持**: 每篇文章可创建多个独立对话
-- **自动迁移**: 旧版单文件格式自动升级为多会话格式
+- **SQLite 持久化**: 每个用户的聊天记录集中保存在 `data/users/<userId>/chats/chat.sqlite`
+- **自动迁移**: 旧版 JSON 对话数据按文章自动迁移到 SQLite
 - **UUID 标识**: 每个会话使用唯一 ID
+- **WAL 模式**: 启用 SQLite WAL，降低并发读写冲突
 - **HTML 清理**: 响应内容自动清理 XSS 风险标签
 
 ### 6. 前端增强功能
@@ -176,6 +183,7 @@ reading-helper/
 ### 环境要求
 - Node.js ≥ 18
 - Redis ≥ 6（必须运行）
+- SQLite 无需额外安装服务（通过 `better-sqlite3` 内嵌使用）
 
 ### 安装依赖
 ```bash
@@ -418,7 +426,15 @@ instances: 2,              // 减少实例数
 
 **解决**: 重启服务，系统会在启动时自动清理（仅 PM2 实例 0 执行）
 
-### 9. 连通性检查失败（AUTH_FAILED / ENDPOINT_NOT_FOUND）
+### 9. 聊天记录未恢复或迁移后找不到
+**问题**: 升级后历史对话没有出现在页面中
+
+**解决**:
+- 确认用户目录下存在 `data/users/<userId>/chats/chat.sqlite`
+- 若目录下仍有旧版 JSON 对话文件，访问对应文章一次以触发自动迁移
+- 检查服务日志中是否有 SQLite 打开失败或迁移异常信息
+
+### 10. 连通性检查失败（AUTH_FAILED / ENDPOINT_NOT_FOUND）
 **问题**: 点击“检查连通性”后返回鉴权失败或端点不存在
 
 **解决**:
@@ -517,6 +533,8 @@ max_memory_restart: '1G'
 - [ ] 文件删除（及关联对话清理）
 - [ ] 提示词列表和保存
 - [ ] 创建/追加/清空/删除对话
+- [ ] SQLite 聊天记录持久化（服务重启后仍可读取）
+- [ ] 旧版 JSON 对话迁移到 SQLite
 - [ ] SSE 流式响应（Chat Completions + Responses API）
 - [ ] 「检查连通性」按钮（成功/超时/401/429 场景）
 - [ ] TTS 语音朗读（不同声音和参数）
