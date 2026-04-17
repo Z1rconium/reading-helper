@@ -4,7 +4,7 @@ if (!app) {
   throw new Error('readingHelperApp 未初始化');
 }
 
-const MODULE_VERSION = '20260416-7';
+const MODULE_VERSION = '20260417-1';
 
 app.registerFeatureLoader('articleRenderer', () => import(`./modules/article-renderer.js?v=${MODULE_VERSION}`));
 app.registerFeatureLoader('speech', () => import(`./modules/speech.js?v=${MODULE_VERSION}`));

@@ -34,6 +34,23 @@ function extractGenericFencedJsonBlock(markdown) {
   return '';
 }
 
+function extractOuterJsonPayload(markdown) {
+  const source = String(markdown || '');
+  const firstObjectStart = source.indexOf('{');
+  const lastObjectEnd = source.lastIndexOf('}');
+  if (firstObjectStart !== -1 && lastObjectEnd >= firstObjectStart) {
+    return source.slice(firstObjectStart, lastObjectEnd + 1).trim();
+  }
+
+  const firstArrayStart = source.indexOf('[');
+  const lastArrayEnd = source.lastIndexOf(']');
+  if (firstArrayStart !== -1 && lastArrayEnd >= firstArrayStart) {
+    return source.slice(firstArrayStart, lastArrayEnd + 1).trim();
+  }
+
+  return '';
+}
+
 function findBalancedJsonCandidate(text, startIndex) {
   const input = String(text || '');
   const openingChar = input[startIndex];
@@ -102,7 +119,10 @@ function collectBalancedJsonCandidates(markdown) {
     }
 
     try {
-      const parsed = JSON.parse(candidate);
+      const parsed = parseJsonWithRecovery(candidate);
+      if (!parsed) {
+        continue;
+      }
       candidates.push({ json: candidate, data: parsed });
       seen.add(candidate);
     } catch (error) {
@@ -144,6 +164,11 @@ function extractJsonPayload(markdown) {
   }
 
   const trimmed = String(markdown || '').trim();
+  const outerPayload = extractOuterJsonPayload(trimmed);
+  if (outerPayload) {
+    return outerPayload;
+  }
+
   const balanced = extractBalancedJsonPayload(trimmed);
   if (balanced) {
     return balanced;
@@ -155,6 +180,112 @@ function extractJsonPayload(markdown) {
   return '';
 }
 
+function getNextNonWhitespaceChar(text, startIndex) {
+  const input = String(text || '');
+  for (let i = startIndex; i < input.length; i += 1) {
+    const char = input[i];
+    if (!/\s/.test(char)) {
+      return char;
+    }
+  }
+  return '';
+}
+
+function repairJsonDelimiters(payload) {
+  const input = String(payload || '').trim();
+  if (!input) return '';
+
+  const output = [];
+  const stack = [];
+  let inString = false;
+  let escaping = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+
+    if (inString) {
+      if (escaping) {
+        output.push(char);
+        escaping = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        output.push(char);
+        escaping = true;
+        continue;
+      }
+
+      if (char === '"') {
+        output.push(char);
+        inString = false;
+        continue;
+      }
+
+      if (char === '\n' || char === '\r') {
+        output.push('"');
+        output.push(char);
+        inString = false;
+        continue;
+      }
+
+      if (char === '}' || char === ']') {
+        const nextChar = getNextNonWhitespaceChar(input, i + 1);
+        if (!nextChar || nextChar === ',' || nextChar === '}' || nextChar === ']') {
+          output.push('"');
+          inString = false;
+          i -= 1;
+          continue;
+        }
+      }
+
+      output.push(char);
+      continue;
+    }
+
+    if (char === '"') {
+      output.push(char);
+      inString = true;
+      continue;
+    }
+
+    if (char === '{' || char === '[') {
+      output.push(char);
+      stack.push(char);
+      continue;
+    }
+
+    if (char === '}' || char === ']') {
+      const expectedOpeningChar = char === '}' ? '{' : '[';
+      if (!stack.length) {
+        continue;
+      }
+
+      while (stack.length && stack[stack.length - 1] !== expectedOpeningChar) {
+        output.push(stack.pop() === '{' ? '}' : ']');
+      }
+
+      if (stack.length) {
+        stack.pop();
+        output.push(char);
+      }
+      continue;
+    }
+
+    output.push(char);
+  }
+
+  if (inString) {
+    output.push('"');
+  }
+
+  while (stack.length) {
+    output.push(stack.pop() === '{' ? '}' : ']');
+  }
+
+  return output.join('').replace(/,\s*([}\]])/g, '$1').trim();
+}
+
 function parseJsonWithRecovery(payload) {
   const input = String(payload || '').trim();
   if (!input) return null;
@@ -163,6 +294,26 @@ function parseJsonWithRecovery(payload) {
   const noTrailingCommas = input.replace(/,\s*([}\]])/g, '$1');
   if (noTrailingCommas !== input) {
     attempts.push(noTrailingCommas);
+  }
+
+  const repaired = repairJsonDelimiters(input);
+  if (repaired && !attempts.includes(repaired)) {
+    attempts.push(repaired);
+  }
+
+  const repairedNoTrailingCommas = repaired.replace(/,\s*([}\]])/g, '$1');
+  if (repairedNoTrailingCommas && !attempts.includes(repairedNoTrailingCommas)) {
+    attempts.push(repairedNoTrailingCommas);
+  }
+
+  const outerPayload = extractOuterJsonPayload(input);
+  if (outerPayload && !attempts.includes(outerPayload)) {
+    attempts.push(outerPayload);
+  }
+
+  const repairedOuterPayload = repairJsonDelimiters(outerPayload);
+  if (repairedOuterPayload && !attempts.includes(repairedOuterPayload)) {
+    attempts.push(repairedOuterPayload);
   }
 
   for (const candidate of attempts) {
@@ -288,6 +439,33 @@ function extractLooseQuestionItems(text) {
   }
 
   return items;
+}
+
+function extractValuePayloadByKey(text, keys, openingChar) {
+  const source = String(text || '');
+  const openingPattern = openingChar === '[' ? '\\[' : '\\{';
+  const closingChar = openingChar === '[' ? ']' : '}';
+
+  for (const key of keys) {
+    const pattern = new RegExp(`"${key}"\\s*:\\s*${openingPattern}`, 'i');
+    const match = pattern.exec(source);
+    if (!match) continue;
+
+    const start = source.indexOf(openingChar, match.index);
+    if (start === -1) continue;
+
+    const balanced = findBalancedJsonCandidate(source, start);
+    if (balanced) {
+      return balanced;
+    }
+
+    const lastClosingIndex = source.lastIndexOf(closingChar);
+    if (lastClosingIndex >= start) {
+      return source.slice(start, lastClosingIndex + 1).trim();
+    }
+  }
+
+  return '';
 }
 
 function parseJsonContent(markdown) {
@@ -428,6 +606,146 @@ function normalizeScalarValue(value) {
     );
   }
   return String(value).trim();
+}
+
+function normalizeSyntaxComponent(item) {
+  if (typeof item === 'string') {
+    const text = item.trim();
+    return text ? { text, type: 'component' } : null;
+  }
+
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  const text = normalizeScalarValue(pickFirstValue(item, ['text', 'label', 'content', 'value']));
+  if (!text) {
+    return null;
+  }
+
+  const type = normalizeScalarValue(pickFirstValue(item, ['type', 'tag', 'role', 'kind'])) || 'component';
+  return { text, type };
+}
+
+function extractLooseComponents(text) {
+  const payload = extractValuePayloadByKey(text, ['components'], '[');
+  const parsed = parseJsonWithRecovery(payload);
+  if (Array.isArray(parsed)) {
+    return parsed.map((item) => normalizeSyntaxComponent(item)).filter(Boolean);
+  }
+
+  const source = payload || String(text || '');
+  const anchors = [];
+  const textRegex = /"text"\s*:/gi;
+  let match;
+
+  while ((match = textRegex.exec(source)) !== null) {
+    anchors.push(match.index);
+  }
+
+  const components = [];
+  for (let i = 0; i < anchors.length; i += 1) {
+    const start = anchors[i];
+    const end = i + 1 < anchors.length ? anchors[i + 1] : source.length;
+    const chunk = source.slice(start, end);
+    const textValue = extractLooseFieldValue(chunk, ['text', 'label', 'content', 'value']);
+    if (!textValue) continue;
+
+    const typeValue = extractLooseFieldValue(chunk, ['type', 'tag', 'role', 'kind']) || 'component';
+    components.push({ text: textValue, type: typeValue });
+  }
+
+  return components;
+}
+
+function buildSyntaxTreeFromComponents(components) {
+  const children = components
+    .map((component) => normalizeSyntaxComponent(component))
+    .filter(Boolean)
+    .map((component) => ({
+      label: component.text,
+      type: component.type,
+      children: []
+    }));
+
+  if (!children.length) {
+    return null;
+  }
+
+  return {
+    label: 'Sentence',
+    type: 'sentence',
+    children
+  };
+}
+
+function normalizeSyntaxTreeNode(node, fallbackLabel = 'Sentence', depth = 0, seen = new Set()) {
+  if (node === undefined || node === null || depth > 50) {
+    return null;
+  }
+
+  if (typeof node === 'string') {
+    const label = node.trim();
+    return label ? { label, type: 'component', children: [] } : null;
+  }
+
+  if (Array.isArray(node)) {
+    const children = node
+      .map((child, index) => normalizeSyntaxTreeNode(child, `${fallbackLabel} ${index + 1}`, depth + 1, seen))
+      .filter(Boolean);
+    return children.length
+      ? { label: fallbackLabel || 'Sentence', type: depth === 0 ? 'sentence' : 'component', children }
+      : null;
+  }
+
+  if (typeof node !== 'object' || seen.has(node)) {
+    return null;
+  }
+  seen.add(node);
+
+  const type = normalizeScalarValue(pickFirstValue(node, ['type', 'tag', 'role', 'kind'])) || (depth === 0 ? 'sentence' : 'component');
+  const label = normalizeScalarValue(pickFirstValue(node, ['label', 'text', 'name', 'content', 'value'])) || fallbackLabel || mapNodeType(type);
+  const rawChildren = pickFirstValue(node, ['children', 'nodes', 'items', 'parts']);
+  const children = Array.isArray(rawChildren)
+    ? rawChildren
+      .map((child, index) => normalizeSyntaxTreeNode(child, `${mapNodeType(type)} ${index + 1}`, depth + 1, seen))
+      .filter(Boolean)
+    : [];
+
+  return { label, type, children };
+}
+
+function countSyntaxTreeNodes(node) {
+  if (!node || typeof node !== 'object') {
+    return 0;
+  }
+
+  const children = Array.isArray(node.children) ? node.children : [];
+  return 1 + children.reduce((sum, child) => sum + countSyntaxTreeNodes(child), 0);
+}
+
+function chooseBestSyntaxTree(candidate, components) {
+  const normalizedCandidate = normalizeSyntaxTreeNode(candidate, 'Sentence');
+  if (!normalizedCandidate) {
+    return null;
+  }
+
+  if (!components.length) {
+    return normalizedCandidate;
+  }
+
+  const componentTree = buildSyntaxTreeFromComponents(components);
+  if (!componentTree) {
+    return normalizedCandidate;
+  }
+
+  const candidateNodeCount = countSyntaxTreeNodes(normalizedCandidate);
+  const topLevelChildCount = Array.isArray(normalizedCandidate.children) ? normalizedCandidate.children.length : 0;
+  const minimumUsefulNodeCount = Math.max(Math.ceil(components.length * 0.75), 4);
+  if (components.length >= 3 && topLevelChildCount <= 1) {
+    return componentTree;
+  }
+  return candidateNodeCount >= minimumUsefulNodeCount ? normalizedCandidate : componentTree;
 }
 
 function unwrapStructuredData(data) {
@@ -888,25 +1206,36 @@ function renderQuestionList(markdown, context = {}) {
 
 function findSyntaxTreeCandidate(markdown) {
   const syntaxTreeKeys = ['syntax_tree', 'syntaxTree', 'tree'];
+  const components = extractLooseComponents(markdown);
   const parsed = parseJsonContent(markdown);
-  const fromPrimaryPayload = pickFirstDeepValue(parsed?.data, syntaxTreeKeys);
+  const fromPrimaryPayload = chooseBestSyntaxTree(pickFirstDeepValue(parsed?.data, syntaxTreeKeys), components);
   if (fromPrimaryPayload && typeof fromPrimaryPayload === 'object') {
     return fromPrimaryPayload;
   }
 
   const balancedCandidates = collectBalancedJsonCandidates(markdown);
   for (const candidate of balancedCandidates) {
-    const fromCandidate = pickFirstDeepValue(candidate.data, syntaxTreeKeys);
+    const fromCandidate = chooseBestSyntaxTree(pickFirstDeepValue(candidate.data, syntaxTreeKeys), components);
     if (fromCandidate && typeof fromCandidate === 'object') {
       return fromCandidate;
     }
+  }
+
+  const looseTreePayload = extractValuePayloadByKey(markdown, syntaxTreeKeys, '{');
+  const looseTree = chooseBestSyntaxTree(parseJsonWithRecovery(looseTreePayload), components);
+  if (looseTree && typeof looseTree === 'object') {
+    return looseTree;
+  }
+
+  if (components.length) {
+    return buildSyntaxTreeFromComponents(components);
   }
 
   return null;
 }
 
 function renderStructureTree(markdown, context = {}) {
-  const syntaxTree = findSyntaxTreeCandidate(markdown);
+  const syntaxTree = normalizeSyntaxTreeNode(findSyntaxTreeCandidate(markdown), 'Sentence');
   if (syntaxTree && typeof syntaxTree === 'object') {
     const div = document.createElement('div');
     div.id = 'syntaxTree';
