@@ -51,7 +51,24 @@ const CONNECTIVITY_TIMEOUT_MS = 10000;
 const TTS_REQUEST_TIMEOUT_MS = 30000;
 const MAX_SSE_BUFFER_SIZE = 10 * 1024; // 10KB
 const MAX_CONNECTIVITY_SUMMARY_LENGTH = 120;
-const EDGE_TTS_ENDPOINT = 'https://edge-tts.shaynewong.dpdns.org/tts';
+const EDGE_TTS_ENDPOINT = (() => {
+  const value = typeof process.env.EDGE_TTS_ENDPOINT === 'string' ? process.env.EDGE_TTS_ENDPOINT.trim() : '';
+  if (!value) {
+    throw new Error('缺少必填环境变量 EDGE_TTS_ENDPOINT');
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('EDGE_TTS_ENDPOINT 必须使用 http 或 https 协议');
+    }
+    return value;
+  } catch (error) {
+    if (error.message === 'EDGE_TTS_ENDPOINT 必须使用 http 或 https 协议') {
+      throw error;
+    }
+    throw new Error(`EDGE_TTS_ENDPOINT 不是有效 URL: ${error.message}`);
+  }
+})();
 
 // #11 AI 请求连接复用 - 创建全局 agent
 const httpsAgent = new https.Agent({
@@ -89,6 +106,31 @@ function parseTrustProxy(value) {
     return Number(trimmed);
   }
   return value;
+}
+
+function getUrlOrigin(url) {
+  if (typeof url !== 'string' || !url.trim()) {
+    return '';
+  }
+  try {
+    const parsed = new URL(url.trim());
+    return parsed.origin && parsed.origin !== 'null' ? parsed.origin : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function buildConnectSrcDirective() {
+  const sources = [
+    "'self'",
+    'https://cdn.jsdelivr.net',
+    'https://challenges.cloudflare.com'
+  ];
+  const ttsOrigin = getUrlOrigin(EDGE_TTS_ENDPOINT);
+  if (ttsOrigin) {
+    sources.push(ttsOrigin);
+  }
+  return Array.from(new Set(sources)).join(' ');
 }
 
 function requireAuth(req, res, next) {
@@ -494,6 +536,7 @@ async function bootstrap() {
 
   // CSP 安全策略
   app.use((req, res, next) => {
+    const connectSrcDirective = buildConnectSrcDirective();
     res.setHeader(
       'Content-Security-Policy',
       "default-src 'self'; " +
@@ -502,7 +545,7 @@ async function bootstrap() {
       "img-src 'self' data: https:; " +
       "font-src 'self' data:; " +
       "media-src 'self' blob:; " +
-      "connect-src 'self' https://edge-tts.shaynewong.dpdns.org https://cdn.jsdelivr.net https://challenges.cloudflare.com; " +
+      `connect-src ${connectSrcDirective}; ` +
       "frame-src 'self' https://challenges.cloudflare.com; " +
       "worker-src 'self' blob:;"
     );
