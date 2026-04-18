@@ -2329,6 +2329,7 @@
             grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
             gap: 20px;
             min-height: 0;
+            max-height: 100%;
         }
 
         .admin-panel,
@@ -2359,6 +2360,7 @@
             display: flex;
             flex-direction: column;
             padding: 24px;
+            max-height: 100%;
         }
 
         .admin-panel-head,
@@ -2457,9 +2459,10 @@
         .admin-user-button:hover,
         .admin-detail-type-button:hover,
         .admin-logout-btn:hover {
-            transform: translateY(-1px);
+            transform: translateY(2px);
             border-color: rgba(150, 216, 245, 0.28);
             background: rgba(255, 255, 255, 0.06);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
 
         .admin-user-button.is-active,
