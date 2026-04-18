@@ -2312,6 +2312,7 @@
             position: relative;
             width: 100%;
             min-height: calc(100vh - 44px);
+            height: calc(100vh - 44px);
             z-index: 1;
         }
 
@@ -2320,6 +2321,7 @@
             grid-template-columns: minmax(300px, 1fr) minmax(0, 2fr);
             gap: 20px;
             min-height: calc(100vh - 44px);
+            height: 100%;
         }
 
         .admin-sidebar {
@@ -2599,6 +2601,13 @@
             gap: 12px;
         }
 
+        .admin-chat-groups {
+            display: grid;
+            gap: 16px;
+            align-content: start;
+            min-height: 100%;
+        }
+
         .admin-timeline-item,
         .admin-event-card,
         .admin-chat-card,
@@ -2665,8 +2674,12 @@
         }
 
         .admin-chat-group {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
             padding: 18px;
-            margin-bottom: 16px;
+            min-height: 0;
+            max-height: min(68vh, 760px);
+            overflow: hidden;
         }
 
         .admin-chat-group-head {
@@ -2706,6 +2719,7 @@
             padding: 0 18px 18px;
             display: none;
             gap: 12px;
+            min-height: 0;
         }
 
         .admin-chat-card.is-expanded .admin-chat-body {
@@ -2763,6 +2777,14 @@
             gap: 12px;
         }
 
+        .admin-chat-card-list {
+            min-height: 0;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            padding-right: 6px;
+            align-content: start;
+        }
+
         .admin-message {
             border-radius: 20px;
             padding: 16px;
@@ -2816,6 +2838,7 @@
             .admin-frame {
                 grid-template-columns: 1fr;
                 min-height: auto;
+                height: auto;
             }
 
             .admin-sidebar {
@@ -2828,6 +2851,19 @@
 
             .admin-detail-panel {
                 min-height: 60vh;
+            }
+
+            .admin-shell {
+                height: auto;
+            }
+
+            .admin-chat-group {
+                max-height: none;
+            }
+
+            .admin-chat-card-list {
+                overflow: visible;
+                padding-right: 0;
             }
         }
 

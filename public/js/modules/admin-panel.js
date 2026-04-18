@@ -341,35 +341,39 @@ function renderChatList(data, user) {
 
   dom.detailTitle.textContent = `${user.userId} · ${DETAIL_TYPES.chats}`;
   dom.detailSubtitle.textContent = '按文章分组浏览历史会话，点击卡片展开完整消息流。';
-  dom.detailContent.innerHTML = articles.map((article) => `
-    <section class="admin-chat-group">
-      <header class="admin-chat-group-head">
-        <div>
-          <span class="admin-chat-group-label">Article</span>
-          <h3>${appRef.escapeHtml(article.articleName)}</h3>
-        </div>
-        <span class="admin-chat-group-count">${appRef.escapeHtml(String(article.conversations?.length || 0))} 个会话</span>
-      </header>
-      <div class="admin-chat-card-list">
-        ${(article.conversations || []).map((conversation) => `
-          <article class="admin-chat-card" data-conversation-id="${appRef.escapeHtml(conversation.id)}">
-            <button
-              type="button"
-              class="admin-chat-toggle"
-              data-user-id="${appRef.escapeHtml(user.userId)}"
-              data-conversation-id="${appRef.escapeHtml(conversation.id)}"
-              aria-expanded="false"
-            >
-              <span class="admin-chat-title">${appRef.escapeHtml(conversation.title || '新对话')}</span>
-              <span class="admin-chat-meta">${appRef.escapeHtml(formatDateTime(conversation.updatedAt))} · ${appRef.escapeHtml(String(conversation.messageCount || 0))} 条消息</span>
-              <span class="admin-chat-preview">${appRef.escapeHtml(conversation.lastMessagePreview || '点击查看完整对话')}</span>
-            </button>
-            <div class="admin-chat-body" aria-hidden="true"></div>
-          </article>
-        `).join('')}
-      </div>
-    </section>
-  `).join('');
+  dom.detailContent.innerHTML = `
+    <div class="admin-chat-groups">
+      ${articles.map((article) => `
+        <section class="admin-chat-group">
+          <header class="admin-chat-group-head">
+            <div>
+              <span class="admin-chat-group-label">Article</span>
+              <h3>${appRef.escapeHtml(article.articleName)}</h3>
+            </div>
+            <span class="admin-chat-group-count">${appRef.escapeHtml(String(article.conversations?.length || 0))} 个会话</span>
+          </header>
+          <div class="admin-chat-card-list">
+            ${(article.conversations || []).map((conversation) => `
+              <article class="admin-chat-card" data-conversation-id="${appRef.escapeHtml(conversation.id)}">
+                <button
+                  type="button"
+                  class="admin-chat-toggle"
+                  data-user-id="${appRef.escapeHtml(user.userId)}"
+                  data-conversation-id="${appRef.escapeHtml(conversation.id)}"
+                  aria-expanded="false"
+                >
+                  <span class="admin-chat-title">${appRef.escapeHtml(conversation.title || '新对话')}</span>
+                  <span class="admin-chat-meta">${appRef.escapeHtml(formatDateTime(conversation.updatedAt))} · ${appRef.escapeHtml(String(conversation.messageCount || 0))} 条消息</span>
+                  <span class="admin-chat-preview">${appRef.escapeHtml(conversation.lastMessagePreview || '点击查看完整对话')}</span>
+                </button>
+                <div class="admin-chat-body" aria-hidden="true"></div>
+              </article>
+            `).join('')}
+          </div>
+        </section>
+      `).join('')}
+    </div>
+  `;
 }
 
 function renderConversationDetail(container, conversation) {
@@ -444,6 +448,15 @@ function setConversationExpanded(card, expanded) {
   if (!expanded) {
     body.scrollTop = 0;
   }
+}
+
+function collapseExpandedConversations(scope, exceptCard = null) {
+  if (!scope) return;
+
+  scope.querySelectorAll('.admin-chat-card.is-expanded').forEach((card) => {
+    if (card === exceptCard) return;
+    setConversationExpanded(card, false);
+  });
 }
 
 async function loadUsers() {
@@ -565,6 +578,7 @@ async function toggleConversation(userId, conversationId) {
     return;
   }
 
+  collapseExpandedConversations(card.closest('.admin-chat-card-list'), card);
   setConversationExpanded(card, true);
   renderConversationPanel(body, {
     userId,
