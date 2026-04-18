@@ -13,7 +13,6 @@ const compression = require('compression');
 const {
   loadAdminConfig,
   loadPlatformConfig,
-  loadUsersConfig,
   getConfigDir
 } = require('./config-loader');
 const {
@@ -27,7 +26,8 @@ const {
 const {
   listPromptFiles,
   readPromptFile,
-  writePromptFile
+  writePromptFile,
+  clearUserPromptSyncState
 } = require('./prompt-store');
 const {
   listConversations,
@@ -38,18 +38,30 @@ const {
   deleteConversation,
   deleteArticleChatStore
 } = require('./chat-store');
-const { getPreferences, savePreferences } = require('./preferences-store');
+const {
+  getPreferences,
+  savePreferences,
+  clearUserPreferencesCache
+} = require('./preferences-store');
 const { assertValidUserId } = require('./user-paths');
-const { createSessionStore } = require('./session-store');
-const { cleanupOrphanedUsers } = require('./cleanup-orphaned-users');
+const {
+  createSessionStore,
+  destroyUserSessions
+} = require('./session-store');
+const {
+  cleanupOrphanedUsers,
+  deleteUserData
+} = require('./cleanup-orphaned-users');
 const { csrfProtection, ensureCsrfToken, generateCsrfToken, setCsrfCookie } = require('./csrf-protection');
 const {
   closeAllChatDatabases,
+  closeUserChatDatabase,
   getConversationRecordById,
   listAllConversationSummaries
 } = require('./chat-db');
 const {
   closeAdminMetricsDatabase,
+  deleteUserMetrics,
   getAiUsageSummary,
   getLoginCountSince,
   listAiUsageEvents,
@@ -57,6 +69,7 @@ const {
   recordAiUsageEvent,
   recordLoginEvent
 } = require('./admin-metrics-store');
+const { createUsersConfigManager } = require('./users-config-manager');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -170,13 +183,6 @@ function isAuthenticatedSession(req) {
   return !!getSessionUserId(req);
 }
 
-function requireUserAuth(req, res, next) {
-  if (isAuthenticatedSession(req) && getSessionRole(req) === 'user') {
-    return next();
-  }
-  return res.status(401).json({ error: 'Unauthorized' });
-}
-
 function requireAdminAuth(req, res, next) {
   if (isAuthenticatedSession(req) && getSessionRole(req) === 'admin') {
     return next();
@@ -223,30 +229,67 @@ function validateRequestedUserId(req, res) {
   return requestedUserId;
 }
 
-function buildUserMaps(users) {
-  const usersByAccessKey = new Map();
-  const usersById = new Map();
-
-  for (const user of users) {
-    usersByAccessKey.set(user.accessKey, user);
-    usersById.set(user.userId, user);
-  }
-
-  return { usersByAccessKey, usersById };
-}
-
 function sendSseChunk(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function buildAuthResponse(req, usersById) {
+function buildLoggedOutAuthResponse() {
+  return {
+    authenticated: false,
+    role: null,
+    userId: null,
+    apiModel: null
+  };
+}
+
+function destroySession(req) {
+  return new Promise((resolve) => {
+    if (!req.session) {
+      resolve();
+      return;
+    }
+
+    req.session.destroy(() => {
+      resolve();
+    });
+  });
+}
+
+async function invalidateSession(req, res) {
+  await destroySession(req);
+  res.clearCookie('reading_helper_sid');
+  res.clearCookie('csrf_token');
+}
+
+function createRequireUserAuth(userConfigManager) {
+  return function requireUserAuth(req, res, next) {
+    void (async () => {
+      if (!isAuthenticatedSession(req) || getSessionRole(req) !== 'user') {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const userId = getSessionUserId(req);
+      const user = await userConfigManager.getUserById(userId);
+
+      if (!user) {
+        await invalidateSession(req, res);
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      req.currentUser = user;
+      next();
+    })().catch((error) => {
+      console.error('[Auth] Failed to load current user:', error.message);
+      res.status(500).json({ error: '用户配置加载失败' });
+    });
+  };
+}
+
+async function buildAuthResponse(req, res, userConfigManager) {
   if (!isAuthenticatedSession(req)) {
-    return {
-      authenticated: false,
-      role: null,
-      userId: null,
-      apiModel: null
-    };
+    return buildLoggedOutAuthResponse();
   }
 
   const role = getSessionRole(req);
@@ -260,12 +303,18 @@ function buildAuthResponse(req, usersById) {
   }
 
   const userId = getSessionUserId(req);
-  const user = usersById.get(userId);
+  const user = await userConfigManager.getUserById(userId);
+
+  if (!user) {
+    await invalidateSession(req, res);
+    return buildLoggedOutAuthResponse();
+  }
+
   return {
     authenticated: true,
     role: 'user',
-    userId: userId || null,
-    apiModel: user?.provider?.api_model || null
+    userId,
+    apiModel: user.provider?.api_model || null
   };
 }
 
@@ -680,7 +729,7 @@ function groupConversationSummariesByArticle(conversations) {
   }));
 }
 
-function getAdminTargetUser(req, res, usersById) {
+async function getAdminTargetUser(req, res, userConfigManager) {
   const userId = typeof req.params?.userId === 'string' ? req.params.userId.trim() : '';
 
   try {
@@ -690,7 +739,14 @@ function getAdminTargetUser(req, res, usersById) {
     return null;
   }
 
-  const user = usersById.get(userId);
+  let user = null;
+  try {
+    user = await userConfigManager.getUserById(userId);
+  } catch (error) {
+    res.status(500).json({ error: '用户配置加载失败' });
+    return null;
+  }
+
   if (!user) {
     res.status(404).json({ error: '用户不存在' });
     return null;
@@ -733,25 +789,53 @@ async function buildAdminUserSummary(user, sinceIso) {
   };
 }
 
+function mapUserConfigMutationError(error) {
+  if (!error?.code) {
+    return { status: 500, message: error?.message || '用户配置更新失败' };
+  }
+
+  if (error.code === 'USER_ID_EXISTS' || error.code === 'ACCESS_KEY_EXISTS') {
+    return { status: 409, message: error.message };
+  }
+
+  if (
+    error.code === 'RESERVED_ACCESS_KEY'
+    || error.code === 'INVALID_JSON'
+    || error.code === 'INVALID_USER_ID'
+  ) {
+    return { status: 400, message: error.message };
+  }
+
+  return { status: 400, message: error.message };
+}
+
 async function bootstrap() {
   const platformConfig = await loadPlatformConfig();
   const adminConfig = await loadAdminConfig();
-  const users = await loadUsersConfig();
-  const { usersByAccessKey, usersById } = buildUserMaps(users);
+  const userConfigManager = createUsersConfigManager({
+    reservedAccessKeys: [adminConfig.accessKey]
+  });
+  const initialUserSnapshot = await userConfigManager.getSnapshot();
   const sessionStore = await createSessionStore();
+  const requireUserAuth = createRequireUserAuth(userConfigManager);
   const trustProxy = parseTrustProxy(TRUST_PROXY_ENV);
   const resolvedTrustProxy = trustProxy === null ? 1 : trustProxy;
-
-  if (usersByAccessKey.has(adminConfig.accessKey)) {
-    throw new Error('admin.config.json 中的 accessKey 不能与普通用户重复');
-  }
 
   // 清理不在配置文件中的用户数据（仅在 pm2 cluster 的第一个实例或非 cluster 模式下执行）
   const pmId = process.env.pm_id || process.env.NODE_APP_INSTANCE;
   const shouldCleanup = !pmId || pmId === '0';
   if (shouldCleanup) {
-    const validUserIds = users.map((user) => user.userId);
+    const validUserIds = initialUserSnapshot.users.map((user) => user.userId);
     await cleanupOrphanedUsers(validUserIds);
+  }
+
+  async function cleanupDeletedUserArtifacts(userId) {
+    await destroyUserSessions(sessionStore, userId);
+    clearUserPromptSyncState(userId);
+    clearUserPreferencesCache(userId);
+    closeUserChatDatabase(userId);
+    await deleteUserMetrics(userId);
+    await deleteUserData(userId);
   }
 
   // 预加载 CET 词表到内存
@@ -935,8 +1019,15 @@ async function bootstrap() {
       return res.status(500).json({ authenticated: false, error: '人机验证服务异常' });
     }
 
-    const user = inputKey ? usersByAccessKey.get(inputKey) : null;
+    let user = null;
     const isAdminLogin = !!inputKey && inputKey === adminConfig.accessKey;
+
+    try {
+      user = inputKey ? await userConfigManager.getUserByAccessKey(inputKey) : null;
+    } catch (error) {
+      console.error('[Auth] Failed to resolve access key:', error.message);
+      return res.status(500).json({ authenticated: false, error: '用户配置加载失败' });
+    }
 
     if (!user && !isAdminLogin) {
       return res.status(401).json({ authenticated: false, error: 'Invalid key' });
@@ -964,24 +1055,26 @@ async function bootstrap() {
       }
     }
 
-    return res.json(buildAuthResponse(req, usersById));
+    try {
+      return res.json(await buildAuthResponse(req, res, userConfigManager));
+    } catch (error) {
+      console.error('[Auth] Failed to build login response:', error.message);
+      return res.status(500).json({ authenticated: false, error: '登录状态生成失败' });
+    }
   });
 
-  app.get('/api/auth/status', ensureCsrfToken, (req, res) => {
-    return res.json(buildAuthResponse(req, usersById));
+  app.get('/api/auth/status', ensureCsrfToken, async (req, res) => {
+    try {
+      return res.json(await buildAuthResponse(req, res, userConfigManager));
+    } catch (error) {
+      console.error('[Auth] Failed to build auth status:', error.message);
+      return res.status(500).json(buildLoggedOutAuthResponse());
+    }
   });
 
-  app.post('/api/auth/logout', csrfProtection, (req, res) => {
-    req.session.destroy(() => {
-      res.clearCookie('reading_helper_sid');
-      res.clearCookie('csrf_token');
-      res.json({
-        authenticated: false,
-        role: null,
-        userId: null,
-        apiModel: null
-      });
-    });
+  app.post('/api/auth/logout', csrfProtection, async (req, res) => {
+    await invalidateSession(req, res);
+    res.json(buildLoggedOutAuthResponse());
   });
 
   const upload = multer({
@@ -1230,6 +1323,7 @@ async function bootstrap() {
     const sinceIso = get24HoursAgoIso();
 
     try {
+      const users = await userConfigManager.listUsers();
       const summaries = await Promise.all(users.map((user) => buildAdminUserSummary(user, sinceIso)));
       return res.json({
         users: summaries,
@@ -1241,8 +1335,54 @@ async function bootstrap() {
     }
   });
 
+  app.post('/api/admin/users', requireAdminAuth, csrfProtection, async (req, res) => {
+    const provider = req.body?.provider && typeof req.body.provider === 'object'
+      ? req.body.provider
+      : {};
+
+    try {
+      const user = await userConfigManager.addUser({
+        userId: req.body?.userId,
+        accessKey: req.body?.accessKey,
+        provider: {
+          api_url: provider.api_url,
+          api_key: provider.api_key,
+          api_model: provider.api_model
+        }
+      });
+
+      return res.status(201).json({ ok: true, user });
+    } catch (error) {
+      const mappedError = mapUserConfigMutationError(error);
+      return res.status(mappedError.status).json({ error: mappedError.message });
+    }
+  });
+
+  app.delete('/api/admin/users/:userId', requireAdminAuth, csrfProtection, async (req, res) => {
+    const userId = typeof req.params?.userId === 'string' ? req.params.userId.trim() : '';
+
+    try {
+      assertValidUserId(userId);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    try {
+      const deletedUser = await userConfigManager.deleteUser(userId);
+      if (!deletedUser) {
+        return res.status(404).json({ error: '用户不存在' });
+      }
+
+      await cleanupDeletedUserArtifacts(userId);
+      return res.json({ ok: true, deletedUserId: userId });
+    } catch (error) {
+      const mappedError = mapUserConfigMutationError(error);
+      return res.status(mappedError.status).json({ error: mappedError.message });
+    }
+  });
+
   app.get('/api/admin/users/:userId/logins', requireAdminAuth, async (req, res) => {
-    const targetUser = getAdminTargetUser(req, res, usersById);
+    const targetUser = await getAdminTargetUser(req, res, userConfigManager);
     if (!targetUser) return;
 
     const sinceIso = get24HoursAgoIso();
@@ -1265,7 +1405,7 @@ async function bootstrap() {
   });
 
   app.get('/api/admin/users/:userId/ai-usage', requireAdminAuth, async (req, res) => {
-    const targetUser = getAdminTargetUser(req, res, usersById);
+    const targetUser = await getAdminTargetUser(req, res, userConfigManager);
     if (!targetUser) return;
 
     const providerDescriptor = getProviderDescriptor(targetUser.provider);
@@ -1293,7 +1433,7 @@ async function bootstrap() {
   });
 
   app.get('/api/admin/users/:userId/chats', requireAdminAuth, async (req, res) => {
-    const targetUser = getAdminTargetUser(req, res, usersById);
+    const targetUser = await getAdminTargetUser(req, res, userConfigManager);
     if (!targetUser) return;
 
     try {
@@ -1308,7 +1448,7 @@ async function bootstrap() {
   });
 
   app.get('/api/admin/users/:userId/chats/:conversationId', requireAdminAuth, async (req, res) => {
-    const targetUser = getAdminTargetUser(req, res, usersById);
+    const targetUser = await getAdminTargetUser(req, res, userConfigManager);
     if (!targetUser) return;
 
     try {
@@ -1333,10 +1473,7 @@ async function bootstrap() {
       return res.status(400).json({ error: 'prompt 不能为空' });
     }
 
-    const user = usersById.get(req.session.userId);
-    if (!user) {
-      return res.status(401).json({ error: '用户会话无效，请重新登录' });
-    }
+    const user = req.currentUser;
     const providerConfig = user.provider;
     const providerDescriptor = getProviderDescriptor(providerConfig);
     const metricsCollector = {
@@ -1442,10 +1579,7 @@ async function bootstrap() {
   });
 
   app.post('/api/ai/connectivity-check', requireUserAuth, csrfProtection, async (req, res) => {
-    const user = usersById.get(req.session.userId);
-    if (!user) {
-      return res.status(401).json({ ok: false, error: '用户会话无效，请重新登录' });
-    }
+    const user = req.currentUser;
     const providerConfig = user.provider;
 
     // 构造最小探测请求体（max_tokens=1，不启用 stream）

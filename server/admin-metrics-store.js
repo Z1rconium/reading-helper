@@ -245,6 +245,22 @@ async function listAiUsageEvents(userId) {
   return normalizeAiUsageEventRows(rows);
 }
 
+async function deleteUserMetrics(userId) {
+  await getDatabase();
+  const transaction = db.transaction((targetUserId) => {
+    prepare(
+      'deleteUserMetrics:loginEvents',
+      'DELETE FROM login_events WHERE user_id = ?'
+    ).run(targetUserId);
+    prepare(
+      'deleteUserMetrics:aiUsageEvents',
+      'DELETE FROM ai_usage_events WHERE user_id = ?'
+    ).run(targetUserId);
+  });
+
+  transaction(userId);
+}
+
 function closeAdminMetricsDatabase() {
   if (!db) {
     return;
@@ -268,6 +284,7 @@ module.exports = {
   listAiUsageEvents,
   listAiUsageEventsSince,
   listLoginEventsSince,
+  deleteUserMetrics,
   recordAiUsageEvent,
   recordLoginEvent
 };

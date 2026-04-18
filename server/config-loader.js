@@ -59,15 +59,8 @@ function normalizeProviderConfig(config, fileName, fieldPrefix) {
   };
 }
 
-async function loadUsersConfig() {
-  const fileName = 'users.config.json';
-  const config = await readJsonConfig(fileName);
+function normalizeUsersConfig(config, fileName = 'users.config.json') {
   const users = Array.isArray(config?.users) ? config.users : [];
-
-  if (users.length === 0) {
-    throw new Error(`${fileName} 至少需要配置一个用户`);
-  }
-
   const seenUserIds = new Set();
   const seenAccessKeys = new Set();
 
@@ -94,9 +87,16 @@ async function loadUsersConfig() {
   });
 }
 
+async function loadUsersConfig() {
+  const fileName = 'users.config.json';
+  const config = await readJsonConfig(fileName);
+  return normalizeUsersConfig(config, fileName);
+}
+
 module.exports = {
   loadAdminConfig,
   loadPlatformConfig,
   loadUsersConfig,
+  normalizeUsersConfig,
   getConfigDir
 };

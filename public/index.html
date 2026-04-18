@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>大学英语阅读助手 v2.3</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%234A90E2' width='100' height='100' rx='20'/><text x='50' y='70' font-size='60' text-anchor='middle' fill='white' font-family='Arial,sans-serif' font-weight='bold'>R</text></svg>">
-    <link rel="stylesheet" href="/css/main.css?v=20260418-5">
+    <link rel="stylesheet" href="/css/main.css?v=20260418-6">
 </head>
 
 <body>
@@ -155,10 +155,16 @@
             <aside class="admin-sidebar">
                 <section class="admin-panel admin-users-panel">
                     <div class="admin-panel-head">
-                        <span class="admin-kicker">Control Index</span>
-                        <div>
-                            <h2>用户视图</h2>
-                            <p>左上选择要审阅的用户。登录次数看最近 24 小时，API 调用与 Token 为全部历史。</p>
+                        <div class="admin-panel-head-copy">
+                            <span class="admin-kicker">Control Index</span>
+                            <div>
+                                <h2>用户视图</h2>
+                                <p>左上选择要审阅的用户。登录次数看最近 24 小时，API 调用与 Token 为全部历史。</p>
+                            </div>
+                        </div>
+                        <div class="admin-user-actions">
+                            <button id="admin-add-user-btn" class="admin-toolbar-btn" type="button">添加用户</button>
+                            <button id="admin-delete-user-btn" class="admin-toolbar-btn admin-toolbar-btn-danger" type="button">删除用户</button>
                         </div>
                     </div>
                     <div class="admin-scroll-region">
@@ -287,10 +293,71 @@
             <div id="mindmap-stage" class="mindmap-stage"></div>
         </div>
     </div>
+    <div id="admin-add-user-modal" class="modal">
+        <div class="modal-content admin-user-modal-content">
+            <div class="admin-user-modal-header">
+                <div>
+                    <h2>添加用户</h2>
+                    <p>按顺序填写访问凭证与上游模型信息，保存后立即生效。</p>
+                </div>
+                <span id="close-admin-add-user-modal" class="close">&times;</span>
+            </div>
+            <form id="admin-add-user-form" class="admin-user-form">
+                <div class="form-group">
+                    <label for="admin-add-user-id">userId</label>
+                    <input id="admin-add-user-id" name="userId" type="text" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="form-group">
+                    <label for="admin-add-access-key">accessKey</label>
+                    <input id="admin-add-access-key" name="accessKey" type="password" autocomplete="new-password" spellcheck="false">
+                </div>
+                <div class="form-group">
+                    <label for="admin-add-api-url">api_url</label>
+                    <input id="admin-add-api-url" name="apiUrl" type="text" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="form-group">
+                    <label for="admin-add-api-key">api_key</label>
+                    <input id="admin-add-api-key" name="apiKey" type="password" autocomplete="new-password" spellcheck="false">
+                </div>
+                <div class="form-group">
+                    <label for="admin-add-api-model">api_model</label>
+                    <input id="admin-add-api-model" name="apiModel" type="text" autocomplete="off" spellcheck="false">
+                </div>
+                <p id="admin-add-user-error" class="admin-modal-error" aria-live="polite"></p>
+                <div class="modal-footer admin-user-modal-footer">
+                    <button id="admin-add-user-cancel" class="cancel-btn" type="button">取消</button>
+                    <button id="admin-add-user-submit" class="save-btn" type="submit">保存用户</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div id="admin-delete-user-modal" class="modal">
+        <div class="modal-content admin-user-modal-content admin-delete-user-modal-content">
+            <div class="admin-user-modal-header">
+                <div>
+                    <h2>删除用户</h2>
+                    <p>删除后会移除配置、清理该用户数据，并使现有会话失效。</p>
+                </div>
+                <span id="close-admin-delete-user-modal" class="close">&times;</span>
+            </div>
+            <form id="admin-delete-user-form" class="admin-user-form">
+                <div class="form-group">
+                    <label for="admin-delete-user-select">选择用户</label>
+                    <select id="admin-delete-user-select" name="userId"></select>
+                </div>
+                <p class="admin-delete-user-warning">这是不可撤销操作，请确认目标用户后再删除。</p>
+                <p id="admin-delete-user-error" class="admin-modal-error" aria-live="polite"></p>
+                <div class="modal-footer admin-user-modal-footer">
+                    <button id="admin-delete-user-cancel" class="cancel-btn" type="button">取消</button>
+                    <button id="admin-delete-user-submit" class="save-btn admin-danger-btn" type="submit">确认删除</button>
+                </div>
+            </form>
+        </div>
+    </div>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
-    <script src="/js/app.js?v=20260418-5"></script>
-    <script type="module" src="/js/main.js?v=20260418-5"></script>
+    <script src="/js/app.js?v=20260418-6"></script>
+    <script type="module" src="/js/main.js?v=20260418-6"></script>
 </body>
 </html>

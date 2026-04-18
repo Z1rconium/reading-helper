@@ -1,6 +1,11 @@
 const fs = require('fs/promises');
 const path = require('path');
-const { getDataRoot } = require('./user-paths');
+const { getDataRoot, getUserDataRoot } = require('./user-paths');
+
+async function deleteUserData(userId) {
+  const userDir = getUserDataRoot(userId);
+  await fs.rm(userDir, { recursive: true, force: true });
+}
 
 /**
  * 删除不在配置文件中的用户数据目录
@@ -52,4 +57,7 @@ async function cleanupOrphanedUsers(validUserIds) {
   console.log('[Cleanup] 用户数据清理完成');
 }
 
-module.exports = { cleanupOrphanedUsers };
+module.exports = {
+  cleanupOrphanedUsers,
+  deleteUserData
+};

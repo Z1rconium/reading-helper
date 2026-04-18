@@ -584,6 +584,21 @@ async function deleteArticleConversations(userId, articleName) {
   ).run(userId, articleName);
 }
 
+function closeUserChatDatabase(userId) {
+  const entry = dbCache.get(userId);
+  if (!entry) {
+    return;
+  }
+
+  try {
+    entry.db.close();
+  } catch (error) {
+    console.warn(`[ChatDB] Failed to close database for user ${userId}: ${error.message}`);
+  } finally {
+    dbCache.delete(userId);
+  }
+}
+
 function closeAllChatDatabases() {
   for (const [userId, entry] of dbCache.entries()) {
     try {
@@ -609,5 +624,6 @@ module.exports = {
   clearConversationRecord,
   deleteConversationRecord,
   deleteArticleConversations,
+  closeUserChatDatabase,
   closeAllChatDatabases
 };

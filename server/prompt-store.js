@@ -131,9 +131,14 @@ async function writePromptFile(userId, fileName, content) {
   };
 }
 
+function clearUserPromptSyncState(userId) {
+  syncedUsers.delete(userId);
+}
+
 module.exports = {
   listPromptFiles,
   readPromptFile,
   writePromptFile,
-  isValidPromptName
+  isValidPromptName,
+  clearUserPromptSyncState
 };

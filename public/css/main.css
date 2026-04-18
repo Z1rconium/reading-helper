@@ -1523,6 +1523,132 @@
             flex-direction: column;
         }
 
+        .admin-user-modal-content {
+            max-width: 580px;
+            color: #eaf6fe;
+            background:
+                linear-gradient(180deg, rgba(9, 18, 28, 0.96), rgba(13, 25, 37, 0.94)),
+                radial-gradient(circle at top right, rgba(105, 176, 206, 0.18), transparent 34%);
+            border: 1px solid rgba(150, 216, 245, 0.16);
+            box-shadow: var(--shadow-ink);
+        }
+
+        .admin-user-modal-content .close {
+            color: rgba(220, 233, 242, 0.72);
+        }
+
+        .admin-user-modal-content .close:hover {
+            color: #f5fbff;
+        }
+
+        .admin-user-modal-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+
+        .admin-user-modal-header h2 {
+            margin: 0 0 8px;
+            font-family: "Baskerville", "Iowan Old Style", "Songti SC", serif;
+            font-size: 28px;
+            letter-spacing: -0.03em;
+            color: #f4fbff;
+        }
+
+        .admin-user-modal-header p,
+        .admin-delete-user-warning,
+        .admin-modal-error {
+            margin: 0;
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        .admin-user-modal-header p,
+        .admin-delete-user-warning {
+            color: rgba(220, 233, 242, 0.72);
+        }
+
+        .admin-user-form .form-group {
+            margin-bottom: 14px;
+        }
+
+        .admin-user-form label {
+            color: #eef7fc;
+        }
+
+        .admin-user-form input[type="text"],
+        .admin-user-form input[type="password"],
+        .admin-user-form select {
+            width: 100%;
+            margin-bottom: 0;
+            border-color: rgba(150, 216, 245, 0.14);
+            background: rgba(255, 255, 255, 0.045);
+            color: #f3fbff;
+            box-shadow: none;
+        }
+
+        .admin-user-form input[type="text"]::placeholder,
+        .admin-user-form input[type="password"]::placeholder {
+            color: rgba(213, 231, 240, 0.48);
+        }
+
+        .admin-user-form input[type="text"]:focus,
+        .admin-user-form input[type="password"]:focus,
+        .admin-user-form select:focus {
+            background: rgba(255, 255, 255, 0.065);
+            border-color: rgba(150, 216, 245, 0.26);
+            box-shadow: 0 0 0 4px rgba(105, 176, 206, 0.12);
+        }
+
+        .admin-user-form select option {
+            color: #10202c;
+        }
+
+        .admin-modal-error {
+            min-height: 22px;
+            color: #ffb8b3;
+        }
+
+        .admin-delete-user-warning {
+            padding: 13px 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 159, 159, 0.14);
+            background: rgba(255, 255, 255, 0.035);
+        }
+
+        .admin-user-modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .admin-user-modal-footer .save-btn {
+            margin: 0;
+        }
+
+        .admin-user-modal-footer .cancel-btn {
+            background: rgba(255, 255, 255, 0.055);
+            color: #eef7fc;
+            border-color: rgba(150, 216, 245, 0.14);
+            box-shadow: none;
+        }
+
+        .admin-user-modal-footer .cancel-btn:hover {
+            background: rgba(255, 255, 255, 0.09);
+        }
+
+        .admin-danger-btn {
+            background: linear-gradient(135deg, #bf5b55, #8d393f);
+            box-shadow: 0 14px 30px rgba(153, 62, 67, 0.28);
+        }
+
+        .admin-danger-btn:hover {
+            box-shadow: 0 18px 34px rgba(153, 62, 67, 0.34);
+        }
+
         .prompt-editor {
             display: none;
             min-height: 0;
@@ -2377,6 +2503,12 @@
             margin-bottom: 18px;
         }
 
+        .admin-panel-head-copy {
+            display: grid;
+            gap: 12px;
+            min-width: 0;
+        }
+
         .admin-panel-head h2,
         .admin-detail-header h1 {
             margin: 10px 0 6px;
@@ -2424,6 +2556,51 @@
             border-radius: 50%;
             background: currentColor;
             box-shadow: 0 0 14px currentColor;
+        }
+
+        .admin-user-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .admin-toolbar-btn {
+            padding: 11px 16px;
+            border-radius: 16px;
+            border: 1px solid rgba(150, 216, 245, 0.18);
+            background: rgba(255, 255, 255, 0.045);
+            color: #edf8ff;
+            font-size: 13px;
+            font-weight: 700;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: transform 0.18s ease, background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+        }
+
+        .admin-toolbar-btn:hover {
+            transform: translateY(-1px);
+            background: rgba(255, 255, 255, 0.075);
+            border-color: rgba(150, 216, 245, 0.28);
+            box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
+        }
+
+        .admin-toolbar-btn:disabled {
+            opacity: 0.44;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .admin-toolbar-btn-danger {
+            color: #ffd9d6;
+            border-color: rgba(255, 159, 159, 0.18);
+            background: rgba(191, 91, 85, 0.12);
+        }
+
+        .admin-toolbar-btn-danger:hover {
+            background: rgba(191, 91, 85, 0.18);
+            border-color: rgba(255, 159, 159, 0.28);
         }
 
         .admin-scroll-region {
@@ -2902,6 +3079,19 @@
             .admin-chat-card.is-expanded {
                 max-height: min(62vh, 640px);
             }
+
+            .admin-panel-head {
+                flex-direction: column;
+            }
+
+            .admin-user-actions {
+                width: 100%;
+                justify-content: stretch;
+            }
+
+            .admin-toolbar-btn {
+                flex: 1 1 180px;
+            }
         }
 
         @media (max-width: 640px) {
@@ -2929,6 +3119,17 @@
             .admin-chat-body-head {
                 align-items: flex-start;
                 flex-direction: column;
+            }
+
+            .admin-user-modal-content {
+                width: min(94vw, 560px);
+                padding: 20px;
+            }
+
+            .admin-user-modal-header,
+            .admin-user-modal-footer {
+                flex-direction: column;
+                align-items: stretch;
             }
         }
 

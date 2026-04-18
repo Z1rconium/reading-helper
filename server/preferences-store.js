@@ -79,4 +79,14 @@ async function savePreferences(userId, preferences) {
   return normalizedPreferences;
 }
 
-module.exports = { getPreferences, savePreferences };
+function clearUserPreferencesCache(userId) {
+  const userDir = getUserDataRoot(userId);
+  ensuredDirs.delete(userDir);
+  preferenceCache.delete(userId);
+}
+
+module.exports = {
+  getPreferences,
+  savePreferences,
+  clearUserPreferencesCache
+};

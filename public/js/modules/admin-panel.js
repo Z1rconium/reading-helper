@@ -8,7 +8,9 @@ const state = {
   chatsCache: new Map(),
   aiUsageCache: new Map(),
   loginsCache: new Map(),
-  conversationCache: new Map()
+  conversationCache: new Map(),
+  isSubmittingAddUser: false,
+  isSubmittingDeleteUser: false
 };
 
 const DETAIL_TYPES = {
@@ -17,6 +19,14 @@ const DETAIL_TYPES = {
   aiUsage: 'API 调用次数',
   tokens: 'Token 消耗'
 };
+
+const ADD_USER_FIELDS = [
+  ['userId', 'userId'],
+  ['accessKey', 'accessKey'],
+  ['api_url', 'api_url'],
+  ['api_key', 'api_key'],
+  ['api_model', 'api_model']
+];
 
 const dom = {};
 
@@ -34,6 +44,28 @@ function cacheDom() {
   dom.detailSubtitle = document.getElementById('admin-detail-subtitle');
   dom.detailContent = document.getElementById('admin-detail-content');
   dom.selectedUserSummary = document.getElementById('admin-selected-user-summary');
+  dom.addUserBtn = document.getElementById('admin-add-user-btn');
+  dom.deleteUserBtn = document.getElementById('admin-delete-user-btn');
+
+  dom.addUserModal = document.getElementById('admin-add-user-modal');
+  dom.addUserForm = document.getElementById('admin-add-user-form');
+  dom.addUserError = document.getElementById('admin-add-user-error');
+  dom.addUserIdInput = document.getElementById('admin-add-user-id');
+  dom.addAccessKeyInput = document.getElementById('admin-add-access-key');
+  dom.addApiUrlInput = document.getElementById('admin-add-api-url');
+  dom.addApiKeyInput = document.getElementById('admin-add-api-key');
+  dom.addApiModelInput = document.getElementById('admin-add-api-model');
+  dom.addUserCancelBtn = document.getElementById('admin-add-user-cancel');
+  dom.addUserSubmitBtn = document.getElementById('admin-add-user-submit');
+  dom.closeAddUserModalBtn = document.getElementById('close-admin-add-user-modal');
+
+  dom.deleteUserModal = document.getElementById('admin-delete-user-modal');
+  dom.deleteUserForm = document.getElementById('admin-delete-user-form');
+  dom.deleteUserSelect = document.getElementById('admin-delete-user-select');
+  dom.deleteUserError = document.getElementById('admin-delete-user-error');
+  dom.deleteUserCancelBtn = document.getElementById('admin-delete-user-cancel');
+  dom.deleteUserSubmitBtn = document.getElementById('admin-delete-user-submit');
+  dom.closeDeleteUserModalBtn = document.getElementById('close-admin-delete-user-modal');
 }
 
 function bindEvents() {
@@ -65,17 +97,54 @@ function bindEvents() {
     void toggleConversation(button.dataset.userId || '', button.dataset.conversationId || '');
   });
 
+  dom.addUserBtn?.addEventListener('click', () => {
+    openAddUserModal();
+  });
+  dom.deleteUserBtn?.addEventListener('click', () => {
+    openDeleteUserModal();
+  });
+
+  dom.closeAddUserModalBtn?.addEventListener('click', closeAddUserModal);
+  dom.addUserCancelBtn?.addEventListener('click', closeAddUserModal);
+  dom.addUserModal?.addEventListener('click', (event) => {
+    if (event.target === dom.addUserModal && !state.isSubmittingAddUser) {
+      closeAddUserModal();
+    }
+  });
+  dom.addUserForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void handleAddUserSubmit();
+  });
+
+  dom.closeDeleteUserModalBtn?.addEventListener('click', closeDeleteUserModal);
+  dom.deleteUserCancelBtn?.addEventListener('click', closeDeleteUserModal);
+  dom.deleteUserModal?.addEventListener('click', (event) => {
+    if (event.target === dom.deleteUserModal && !state.isSubmittingDeleteUser) {
+      closeDeleteUserModal();
+    }
+  });
+  dom.deleteUserForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void handleDeleteUserSubmit();
+  });
+
   initialized = true;
+}
+
+function clearAdminCaches() {
+  state.chatsCache.clear();
+  state.aiUsageCache.clear();
+  state.loginsCache.clear();
+  state.conversationCache.clear();
 }
 
 function resetState() {
   state.users = [];
   state.selectedUserId = '';
   state.selectedDetailKey = 'chats';
-  state.chatsCache.clear();
-  state.aiUsageCache.clear();
-  state.loginsCache.clear();
-  state.conversationCache.clear();
+  state.isSubmittingAddUser = false;
+  state.isSubmittingDeleteUser = false;
+  clearAdminCaches();
 }
 
 function formatDateTime(value) {
@@ -122,11 +191,27 @@ function renderEmpty(title, message) {
   `;
 }
 
-async function fetchAdminJson(url) {
+async function fetchAdminJson(url, options = {}) {
+  const { body, headers = {}, ...rest } = options;
+  const requestHeaders = { ...headers };
+  const csrfToken = appRef.getCsrfToken?.();
+  if (csrfToken) {
+    requestHeaders['X-CSRF-Token'] = csrfToken;
+  }
+
+  let requestBody = body;
+  if (body !== undefined && body !== null && !(body instanceof FormData) && typeof body !== 'string') {
+    requestHeaders['Content-Type'] = 'application/json';
+    requestBody = JSON.stringify(body);
+  }
+
   const response = await fetch(url, {
     method: 'GET',
     credentials: 'include',
-    cache: 'no-store'
+    cache: 'no-store',
+    ...rest,
+    headers: requestHeaders,
+    body: requestBody
   });
 
   if (response.status === 401) {
@@ -134,17 +219,20 @@ async function fetchAdminJson(url) {
     throw new Error('管理员会话已失效，请重新登录');
   }
 
-  if (!response.ok) {
-    let data = null;
+  let data = null;
+  if (response.status !== 204) {
     try {
       data = await response.json();
     } catch (error) {
       data = null;
     }
+  }
+
+  if (!response.ok) {
     throw new Error(data?.error || `请求失败: ${response.status}`);
   }
 
-  return response.json();
+  return data;
 }
 
 function getSelectedUser() {
@@ -177,7 +265,15 @@ function buildUserSummaryText(user) {
   return summaryParts.join(' · ');
 }
 
+function updateUserActionButtons() {
+  if (dom.deleteUserBtn) {
+    dom.deleteUserBtn.disabled = state.users.length === 0;
+  }
+}
+
 function renderUserList() {
+  updateUserActionButtons();
+
   if (!state.users.length) {
     dom.userList.innerHTML = '<li class="admin-list-empty">暂无可管理用户。</li>';
     return;
@@ -203,8 +299,14 @@ function renderUserList() {
 
 function renderDetailTypeList() {
   const user = getSelectedUser();
-  const availableKeys = getAvailableDetailKeys(user);
 
+  if (!user) {
+    dom.selectedUserSummary.textContent = state.users.length ? '请选择用户。' : '当前配置中没有普通用户。';
+    dom.detailTypeList.innerHTML = '<li class="admin-list-empty">暂无详情类型可展示。</li>';
+    return;
+  }
+
+  const availableKeys = getAvailableDetailKeys(user);
   if (!availableKeys.includes(state.selectedDetailKey)) {
     state.selectedDetailKey = availableKeys[0] || 'chats';
   }
@@ -519,7 +621,7 @@ async function loadConversation(userId, conversationId) {
 async function renderCurrentDetail() {
   const user = getSelectedUser();
   if (!user) {
-    renderEmpty('没有可展示内容', '当前没有用户可供查看。');
+    renderEmpty('没有可展示内容', state.users.length ? '当前没有用户可供查看。' : '当前配置中还没有普通用户。');
     return;
   }
 
@@ -604,29 +706,242 @@ async function toggleConversation(userId, conversationId) {
   }
 }
 
+function setModalError(element, message = '') {
+  if (element) {
+    element.textContent = message;
+  }
+}
+
+function setAddUserSubmitting(isSubmitting) {
+  state.isSubmittingAddUser = isSubmitting;
+  if (dom.addUserSubmitBtn) {
+    dom.addUserSubmitBtn.disabled = isSubmitting;
+    dom.addUserSubmitBtn.textContent = isSubmitting ? '保存中...' : '保存用户';
+  }
+  if (dom.addUserCancelBtn) {
+    dom.addUserCancelBtn.disabled = isSubmitting;
+  }
+}
+
+function setDeleteUserSubmitting(isSubmitting) {
+  state.isSubmittingDeleteUser = isSubmitting;
+  if (dom.deleteUserSubmitBtn) {
+    dom.deleteUserSubmitBtn.disabled = isSubmitting;
+    dom.deleteUserSubmitBtn.textContent = isSubmitting ? '删除中...' : '确认删除';
+  }
+  if (dom.deleteUserCancelBtn) {
+    dom.deleteUserCancelBtn.disabled = isSubmitting;
+  }
+  if (dom.deleteUserSelect) {
+    dom.deleteUserSelect.disabled = isSubmitting;
+  }
+}
+
+function openAddUserModal() {
+  setModalError(dom.addUserError, '');
+  dom.addUserForm?.reset();
+  setAddUserSubmitting(false);
+  if (dom.addUserModal) {
+    dom.addUserModal.style.display = 'flex';
+  }
+  dom.addUserIdInput?.focus();
+}
+
+function closeAddUserModal() {
+  if (state.isSubmittingAddUser) {
+    return;
+  }
+  if (dom.addUserModal) {
+    dom.addUserModal.style.display = 'none';
+  }
+  setModalError(dom.addUserError, '');
+  dom.addUserForm?.reset();
+}
+
+function populateDeleteUserOptions(selectedUserId = '') {
+  if (!dom.deleteUserSelect) {
+    return;
+  }
+
+  if (!state.users.length) {
+    dom.deleteUserSelect.innerHTML = '<option value="">暂无用户可删除</option>';
+    dom.deleteUserSelect.value = '';
+    return;
+  }
+
+  dom.deleteUserSelect.innerHTML = state.users.map((user) => `
+    <option value="${appRef.escapeHtml(user.userId)}">${appRef.escapeHtml(user.userId)}</option>
+  `).join('');
+
+  const preferredUserId = state.users.some((user) => user.userId === selectedUserId)
+    ? selectedUserId
+    : state.selectedUserId || state.users[0].userId;
+  dom.deleteUserSelect.value = preferredUserId;
+}
+
+function openDeleteUserModal() {
+  if (!state.users.length) {
+    return;
+  }
+
+  populateDeleteUserOptions(state.selectedUserId);
+  setModalError(dom.deleteUserError, '');
+  setDeleteUserSubmitting(false);
+  if (dom.deleteUserModal) {
+    dom.deleteUserModal.style.display = 'flex';
+  }
+  dom.deleteUserSelect?.focus();
+}
+
+function closeDeleteUserModal() {
+  if (state.isSubmittingDeleteUser) {
+    return;
+  }
+  if (dom.deleteUserModal) {
+    dom.deleteUserModal.style.display = 'none';
+  }
+  setModalError(dom.deleteUserError, '');
+}
+
+function closeUserModals() {
+  if (dom.addUserModal) {
+    dom.addUserModal.style.display = 'none';
+  }
+  if (dom.deleteUserModal) {
+    dom.deleteUserModal.style.display = 'none';
+  }
+  setModalError(dom.addUserError, '');
+  setModalError(dom.deleteUserError, '');
+  dom.addUserForm?.reset();
+  setAddUserSubmitting(false);
+  setDeleteUserSubmitting(false);
+}
+
+function getAddUserPayload() {
+  return {
+    userId: dom.addUserIdInput?.value.trim() || '',
+    accessKey: dom.addAccessKeyInput?.value.trim() || '',
+    provider: {
+      api_url: dom.addApiUrlInput?.value.trim() || '',
+      api_key: dom.addApiKeyInput?.value.trim() || '',
+      api_model: dom.addApiModelInput?.value.trim() || ''
+    }
+  };
+}
+
+function validateAddUserPayload(payload) {
+  const values = {
+    userId: payload.userId,
+    accessKey: payload.accessKey,
+    api_url: payload.provider.api_url,
+    api_key: payload.provider.api_key,
+    api_model: payload.provider.api_model
+  };
+
+  for (const [fieldKey, fieldLabel] of ADD_USER_FIELDS) {
+    if (!values[fieldKey]) {
+      return `${fieldLabel} 不能为空`;
+    }
+  }
+
+  return '';
+}
+
+async function refreshUsers(options = {}) {
+  const preferredUserId = typeof options.selectedUserId === 'string'
+    ? options.selectedUserId
+    : state.selectedUserId;
+
+  clearAdminCaches();
+  await loadUsers();
+  renderUserList();
+
+  if (!state.users.length) {
+    state.selectedUserId = '';
+    state.selectedDetailKey = 'chats';
+    renderDetailTypeList();
+    renderEmpty('没有可管理用户', '当前配置中还没有普通用户，可通过右上角按钮直接添加。');
+    return;
+  }
+
+  const nextSelectedUser = state.users.find((user) => user.userId === preferredUserId) || state.users[0];
+  state.selectedUserId = nextSelectedUser.userId;
+  renderUserList();
+  renderDetailTypeList();
+  await renderCurrentDetail();
+}
+
+async function handleAddUserSubmit() {
+  if (state.isSubmittingAddUser) {
+    return;
+  }
+
+  const payload = getAddUserPayload();
+  const validationMessage = validateAddUserPayload(payload);
+  if (validationMessage) {
+    setModalError(dom.addUserError, validationMessage);
+    return;
+  }
+
+  setModalError(dom.addUserError, '');
+  setAddUserSubmitting(true);
+
+  try {
+    const data = await fetchAdminJson('/api/admin/users', {
+      method: 'POST',
+      body: payload
+    });
+    setAddUserSubmitting(false);
+    closeAddUserModal();
+    await refreshUsers({ selectedUserId: data?.user?.userId || payload.userId });
+  } catch (error) {
+    setModalError(dom.addUserError, error.message || '添加用户失败');
+  } finally {
+    setAddUserSubmitting(false);
+  }
+}
+
+async function handleDeleteUserSubmit() {
+  if (state.isSubmittingDeleteUser) {
+    return;
+  }
+
+  const userId = dom.deleteUserSelect?.value.trim() || '';
+  if (!userId) {
+    setModalError(dom.deleteUserError, '请选择要删除的用户');
+    return;
+  }
+
+  setModalError(dom.deleteUserError, '');
+  setDeleteUserSubmitting(true);
+
+  try {
+    await fetchAdminJson(`/api/admin/users/${encodeURIComponent(userId)}`, {
+      method: 'DELETE'
+    });
+    setDeleteUserSubmitting(false);
+    closeDeleteUserModal();
+    await refreshUsers({
+      selectedUserId: state.selectedUserId === userId ? '' : state.selectedUserId
+    });
+  } catch (error) {
+    setModalError(dom.deleteUserError, error.message || '删除用户失败');
+  } finally {
+    setDeleteUserSubmitting(false);
+  }
+}
+
 async function activateAdminPanel() {
   if (!appRef) {
     return;
   }
 
   resetState();
+  closeUserModals();
   renderLoading('正在读取管理员后台数据...');
 
   try {
-    await loadUsers();
-    renderUserList();
-    if (!state.users.length) {
-      dom.selectedUserSummary.textContent = '当前配置中没有普通用户。';
-      dom.detailTypeList.innerHTML = '<li class="admin-list-empty">暂无详情类型可展示。</li>';
-      renderEmpty('没有可管理用户', '请先在 users.config.json 中配置普通用户。');
-      return;
-    }
-
-    state.selectedUserId = state.users[0].userId;
-    state.selectedDetailKey = 'chats';
-    renderUserList();
-    renderDetailTypeList();
-    await renderCurrentDetail();
+    await refreshUsers({ selectedUserId: '' });
   } catch (error) {
     renderError(error.message || '后台初始化失败');
   }
@@ -634,6 +949,7 @@ async function activateAdminPanel() {
 
 async function deactivateAdminPanel() {
   resetState();
+  closeUserModals();
   if (dom.userList) {
     dom.userList.innerHTML = '';
   }
@@ -649,6 +965,7 @@ async function deactivateAdminPanel() {
   if (dom.detailSubtitle) {
     dom.detailSubtitle.textContent = '选择左侧用户与详情类型后，这里会展示细节内容。';
   }
+  updateUserActionButtons();
   renderEmpty('等待加载', '管理员登录后会在这里展示用户统计与聊天记录。');
 }
 

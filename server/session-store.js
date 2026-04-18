@@ -37,6 +37,24 @@ async function createSessionStore() {
   });
 }
 
+async function destroyUserSessions(sessionStore, userId) {
+  if (!sessionStore || !userId) {
+    return 0;
+  }
+
+  const sessions = await sessionStore.all();
+  const matchingSessions = sessions.filter((session) => (
+    session?.authenticated === true
+    && session?.role === 'user'
+    && session?.userId === userId
+    && session?.id
+  ));
+
+  await Promise.all(matchingSessions.map((session) => sessionStore.destroy(session.id)));
+  return matchingSessions.length;
+}
+
 module.exports = {
-  createSessionStore
+  createSessionStore,
+  destroyUserSessions
 };
