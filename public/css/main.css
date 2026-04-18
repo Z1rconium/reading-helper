@@ -2308,6 +2308,490 @@
             border-top: 1px solid rgba(255, 255, 255, 0.08);
         }
 
+        .admin-shell {
+            position: relative;
+            width: 100%;
+            min-height: calc(100vh - 44px);
+            z-index: 1;
+        }
+
+        .admin-frame {
+            display: grid;
+            grid-template-columns: minmax(300px, 1fr) minmax(0, 2fr);
+            gap: 20px;
+            min-height: calc(100vh - 44px);
+        }
+
+        .admin-sidebar {
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 20px;
+            min-height: 0;
+        }
+
+        .admin-panel,
+        .admin-detail-panel {
+            position: relative;
+            min-height: 0;
+            overflow: hidden;
+            border-radius: 30px;
+            border: 1px solid rgba(184, 213, 228, 0.18);
+            background:
+                linear-gradient(180deg, rgba(10, 19, 28, 0.92), rgba(13, 25, 37, 0.9)),
+                radial-gradient(circle at top right, rgba(105, 176, 206, 0.16), transparent 30%);
+            box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+            color: #ecf5fb;
+        }
+
+        .admin-panel::before,
+        .admin-detail-panel::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            pointer-events: none;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 22%, transparent 78%, rgba(255, 255, 255, 0.03));
+        }
+
+        .admin-panel {
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+        }
+
+        .admin-panel-head,
+        .admin-detail-header {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 18px;
+        }
+
+        .admin-panel-head {
+            margin-bottom: 18px;
+        }
+
+        .admin-panel-head h2,
+        .admin-detail-header h1 {
+            margin: 10px 0 6px;
+            font-family: "Baskerville", "Iowan Old Style", "Songti SC", serif;
+            letter-spacing: -0.03em;
+            color: #f4fbff;
+        }
+
+        .admin-panel-head h2 {
+            font-size: 28px;
+        }
+
+        .admin-detail-header h1 {
+            font-size: 40px;
+        }
+
+        .admin-panel-head p,
+        .admin-detail-subtitle,
+        .admin-selected-user-summary {
+            margin: 0;
+            color: rgba(220, 233, 242, 0.7);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        .admin-kicker {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 12px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: #96d8f5;
+            background: rgba(78, 140, 172, 0.18);
+            border: 1px solid rgba(150, 216, 245, 0.16);
+        }
+
+        .admin-kicker::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 14px currentColor;
+        }
+
+        .admin-scroll-region {
+            position: relative;
+            z-index: 1;
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding-right: 4px;
+        }
+
+        .admin-user-list,
+        .admin-detail-type-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: grid;
+            gap: 10px;
+        }
+
+        .admin-user-button,
+        .admin-detail-type-button,
+        .admin-logout-btn {
+            width: 100%;
+            border: 1px solid rgba(170, 208, 227, 0.12);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.035);
+            color: inherit;
+            cursor: pointer;
+            transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
+        }
+
+        .admin-user-button:hover,
+        .admin-detail-type-button:hover,
+        .admin-logout-btn:hover {
+            transform: translateY(-1px);
+            border-color: rgba(150, 216, 245, 0.28);
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .admin-user-button.is-active,
+        .admin-detail-type-button.is-active {
+            background: linear-gradient(135deg, rgba(105, 176, 206, 0.26), rgba(73, 124, 154, 0.18));
+            border-color: rgba(150, 216, 245, 0.32);
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.16);
+        }
+
+        .admin-user-button {
+            display: grid;
+            gap: 6px;
+            padding: 16px 18px;
+            text-align: left;
+        }
+
+        .admin-user-name,
+        .admin-chat-title,
+        .admin-summary-value {
+            font-weight: 700;
+            color: #f3fbff;
+        }
+
+        .admin-user-meta,
+        .admin-user-stats,
+        .admin-chat-meta,
+        .admin-chat-preview,
+        .admin-chat-group-count,
+        .admin-summary-label,
+        .admin-event-meta,
+        .admin-message-time,
+        .admin-list-empty,
+        .admin-empty-inline {
+            color: rgba(215, 231, 240, 0.66);
+            font-size: 13px;
+        }
+
+        .admin-detail-type-button {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            font-weight: 700;
+            text-align: left;
+        }
+
+        .admin-detail-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 34px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            background: rgba(150, 216, 245, 0.12);
+            color: #c7efff;
+        }
+
+        .admin-detail-panel {
+            display: flex;
+            flex-direction: column;
+            padding: 28px;
+        }
+
+        .admin-detail-header {
+            margin-bottom: 22px;
+        }
+
+        .admin-logout-btn {
+            width: auto;
+            padding: 12px 18px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .admin-detail-content {
+            position: relative;
+            z-index: 1;
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding-right: 4px;
+        }
+
+        .admin-empty-state {
+            min-height: 100%;
+            display: grid;
+            place-content: center;
+            gap: 10px;
+            text-align: center;
+            color: rgba(221, 234, 243, 0.74);
+            padding: 32px;
+            border-radius: 26px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px dashed rgba(150, 216, 245, 0.14);
+        }
+
+        .admin-empty-state h3 {
+            margin: 0;
+            font-family: "Baskerville", "Iowan Old Style", "Songti SC", serif;
+            font-size: 32px;
+            color: #f5fbff;
+        }
+
+        .admin-empty-state-error {
+            border-color: rgba(255, 149, 149, 0.18);
+            color: rgba(255, 194, 194, 0.86);
+        }
+
+        .admin-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin-bottom: 22px;
+        }
+
+        .admin-summary-card {
+            padding: 18px 18px 20px;
+            border-radius: 22px;
+            background: rgba(255, 255, 255, 0.045);
+            border: 1px solid rgba(150, 216, 245, 0.12);
+            display: grid;
+            gap: 12px;
+        }
+
+        .admin-summary-value {
+            font-size: 30px;
+            line-height: 1;
+        }
+
+        .admin-timeline,
+        .admin-event-list,
+        .admin-chat-card-list {
+            display: grid;
+            gap: 12px;
+        }
+
+        .admin-timeline-item,
+        .admin-event-card,
+        .admin-chat-card,
+        .admin-chat-group {
+            border-radius: 22px;
+            border: 1px solid rgba(150, 216, 245, 0.1);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .admin-timeline-item {
+            display: flex;
+            gap: 14px;
+            padding: 16px 18px;
+        }
+
+        .admin-timeline-dot {
+            width: 10px;
+            height: 10px;
+            margin-top: 7px;
+            border-radius: 50%;
+            background: #96d8f5;
+            box-shadow: 0 0 16px rgba(150, 216, 245, 0.55);
+        }
+
+        .admin-timeline-title,
+        .admin-message-role,
+        .admin-chat-group-label {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #9bdcf8;
+        }
+
+        .admin-event-card {
+            padding: 16px 18px;
+            display: grid;
+            gap: 10px;
+        }
+
+        .admin-event-row,
+        .admin-token-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .admin-event-status {
+            padding: 5px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.06);
+            font-size: 12px;
+            color: #def3ff;
+        }
+
+        .admin-token-row {
+            color: rgba(221, 236, 245, 0.8);
+            font-size: 13px;
+        }
+
+        .admin-chat-group {
+            padding: 18px;
+            margin-bottom: 16px;
+        }
+
+        .admin-chat-group-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .admin-chat-group-head h3 {
+            margin: 6px 0 0;
+            font-size: 26px;
+            font-family: "Baskerville", "Iowan Old Style", "Songti SC", serif;
+            color: #f4fbff;
+        }
+
+        .admin-chat-toggle {
+            width: 100%;
+            display: grid;
+            gap: 8px;
+            padding: 16px 18px;
+            border: none;
+            border-radius: 18px;
+            background: transparent;
+            color: inherit;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .admin-chat-card.is-expanded {
+            border-color: rgba(150, 216, 245, 0.2);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .admin-chat-body {
+            padding: 0 18px 18px;
+            display: grid;
+            gap: 12px;
+        }
+
+        .admin-message {
+            border-radius: 20px;
+            padding: 16px;
+            border: 1px solid rgba(150, 216, 245, 0.1);
+        }
+
+        .admin-message-user {
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .admin-message-assistant {
+            background: linear-gradient(135deg, rgba(77, 126, 152, 0.22), rgba(255, 255, 255, 0.03));
+        }
+
+        .admin-message-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .admin-message-body {
+            color: #edf6fb;
+            line-height: 1.75;
+        }
+
+        .admin-message-body :is(p, ul, ol, pre, blockquote, table) {
+            margin-top: 0;
+        }
+
+        .admin-message-body pre {
+            padding: 14px;
+            border-radius: 14px;
+            background: rgba(0, 0, 0, 0.24);
+            overflow: auto;
+        }
+
+        .admin-message-body code {
+            font-family: var(--font-mono);
+        }
+
+        .admin-list-empty,
+        .admin-empty-inline {
+            padding: 18px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        @media (max-width: 980px) {
+            .admin-frame {
+                grid-template-columns: 1fr;
+                min-height: auto;
+            }
+
+            .admin-sidebar {
+                grid-template-rows: auto auto;
+            }
+
+            .admin-panel {
+                min-height: 320px;
+            }
+
+            .admin-detail-panel {
+                min-height: 60vh;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .admin-detail-panel,
+            .admin-panel {
+                padding: 20px;
+                border-radius: 24px;
+            }
+
+            .admin-detail-header {
+                flex-direction: column;
+            }
+
+            .admin-summary-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .admin-event-row,
+            .admin-token-row,
+            .admin-chat-group-head {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+
         @media (prefers-reduced-motion: reduce) {
 
             *,

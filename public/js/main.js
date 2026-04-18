@@ -4,13 +4,14 @@ if (!app) {
   throw new Error('readingHelperApp 未初始化');
 }
 
-const MODULE_VERSION = '20260417-1';
+const MODULE_VERSION = '20260418-1';
 
 app.registerFeatureLoader('articleRenderer', () => import(`./modules/article-renderer.js?v=${MODULE_VERSION}`));
 app.registerFeatureLoader('speech', () => import(`./modules/speech.js?v=${MODULE_VERSION}`));
 app.registerFeatureLoader('mindmap', () => import(`./modules/mindmap.js?v=${MODULE_VERSION}`));
 app.registerFeatureLoader('quiz', () => import(`./modules/quiz.js?v=${MODULE_VERSION}`));
 app.registerFeatureLoader('promptManager', () => import(`./modules/prompt-manager.js?v=${MODULE_VERSION}`));
+app.registerFeatureLoader('adminPanel', () => import(`./modules/admin-panel.js?v=${MODULE_VERSION}`));
 
 function primeFeatureOnIntent(element, featureName) {
   if (!element) return;

@@ -1,4 +1,6 @@
         // DOM元素
+        const appShell = document.querySelector('.app-shell');
+        const adminShell = document.getElementById('admin-shell');
         const container = document.querySelector('.container');
         const fileList = document.getElementById('file-list');
         const fileHistory = document.getElementById('file-history');
@@ -206,6 +208,7 @@
         let currentConversationId = '';
         let creatingConversationPromise = null;
         let fontSize = 16; // 默认字体大小
+        let currentRole = '';
         let currentUserId = '';
 
         // 拖动调整面板宽度功能
@@ -220,6 +223,7 @@
         const loginBtn = document.getElementById('login-btn');
         const authError = document.getElementById('auth-error');
         const logoutBtn = document.getElementById('logout-btn');
+        const adminLogoutBtn = document.getElementById('admin-logout-btn');
         const connectivityCheckBtn = document.getElementById('connectivity-check-btn');
         const turnstileWidget = document.getElementById('turnstile-widget');
         let turnstileToken = '';
@@ -590,6 +594,65 @@
             getLoadedFeatureModule('promptManager')?.resetState?.();
         }
 
+        function hideModelBadge() {
+            const modelBadge = document.getElementById('model-badge');
+            if (modelBadge) {
+                modelBadge.style.display = 'none';
+                modelBadge.textContent = '';
+            }
+        }
+
+        function setActiveShell(role) {
+            const isAdmin = role === 'admin';
+            if (appShell) {
+                appShell.style.display = isAdmin ? 'none' : '';
+            }
+            if (adminShell) {
+                adminShell.style.display = isAdmin ? 'block' : 'none';
+            }
+            document.body.classList.toggle('is-admin-mode', isAdmin);
+        }
+
+        function resetUserWorkspace() {
+            clearServerFiles();
+            currentFileName = '';
+            currentFileContent = '';
+            currentSelection = '';
+            selectedRange = null;
+            pContent = '';
+            currentConversationId = '';
+            creatingConversationPromise = null;
+            renderedFileNames = [];
+            contextMenuFileName = '';
+            contextMenuConversationId = '';
+            getLoadedFeatureModule('articleRenderer')?.resetState?.();
+            getLoadedFeatureModule('mindmap')?.resetState?.();
+            getLoadedFeatureModule('speech')?.resetState?.();
+            resetSummaryEvaluationState();
+            resetPromptState();
+            resetPreferenceState();
+            hideFileContextMenu();
+            hideChatHistoryContextMenu();
+            chatHistoryModal.style.display = 'none';
+            fileNameDisplay.textContent = '未选择文件';
+            textContent.innerHTML = defaultTextContentHtml;
+            clearChatPanel();
+            updateFileList();
+        }
+
+        async function deactivateAdminPanel() {
+            try {
+                const adminPanel = getLoadedFeatureModule('adminPanel');
+                await adminPanel?.deactivateAdminPanel?.();
+            } catch (error) {
+            }
+        }
+
+        async function activateAdminPanel() {
+            const adminPanel = await loadFeatureModule('adminPanel');
+            await adminPanel?.activateAdminPanel?.();
+        }
+
         function isSummaryEvaluationPrompt(promptText) {
             const text = String(promptText || '');
             if (!text) return false;
@@ -609,7 +672,66 @@
             return `${articleText.slice(0, MAX_ARTICLE_CONTEXT_CHARS)}\n\n[文章较长，以上为前 ${MAX_ARTICLE_CONTEXT_CHARS} 个字符]`;
         }
 
+        async function showAuthenticatedView(options = {}) {
+            const {
+                role,
+                hydrateUserData = false,
+                apiModel = ''
+            } = options;
+
+            if (role === 'admin') {
+                stopHeartbeat();
+                hideModelBadge();
+                setActiveShell('admin');
+                await activateAdminPanel();
+                if (adminLogoutBtn) {
+                    adminLogoutBtn.title = '管理员退出';
+                }
+                logoutBtn.title = '退出';
+                return;
+            }
+
+            await deactivateAdminPanel();
+            setActiveShell('user');
+            startHeartbeat();
+            if (apiModel) {
+                showModelBadge(apiModel);
+            } else {
+                hideModelBadge();
+            }
+            logoutBtn.title = currentUserId ? `当前用户: ${currentUserId}` : '退出';
+            if (adminLogoutBtn) {
+                adminLogoutBtn.title = '退出';
+            }
+
+            if (hydrateUserData) {
+                try {
+                    await fetchServerFileList();
+                    updateFileList();
+                } catch (error) {
+                    addSystemMessage(`读取文件列表失败: ${error.message}`);
+                }
+                await loadPreferences();
+            }
+        }
+
+        async function showLoggedOutView() {
+            stopHeartbeat();
+            currentRole = '';
+            currentUserId = '';
+            await deactivateAdminPanel();
+            setActiveShell('user');
+            resetUserWorkspace();
+            hideModelBadge();
+            logoutBtn.title = '退出';
+            if (adminLogoutBtn) {
+                adminLogoutBtn.title = '退出';
+            }
+            showAuthModal();
+        }
+
         async function checkAuthStatus() {
+            const previousRole = currentRole;
             const previousUserId = currentUserId;
             try {
                 const response = await fetch('/api/auth/status', {
@@ -620,38 +742,36 @@
 
                 const data = await response.json();
                 const authenticated = !!data.authenticated;
-                const nextUserId = authenticated && typeof data.userId === 'string' ? data.userId : '';
-                if (!authenticated || (previousUserId && previousUserId !== nextUserId)) {
+                const nextRole = authenticated && (data.role === 'admin' || data.role === 'user') ? data.role : '';
+                const nextUserId = nextRole === 'user' && typeof data.userId === 'string' ? data.userId : '';
+                const shouldResetWorkspace = !authenticated
+                    || previousRole !== nextRole
+                    || (previousUserId && previousUserId !== nextUserId);
+
+                if (!authenticated || previousRole !== nextRole || (previousUserId && previousUserId !== nextUserId)) {
                     resetPromptState();
                 }
+                if (shouldResetWorkspace) {
+                    resetUserWorkspace();
+                }
+                currentRole = nextRole;
                 currentUserId = nextUserId;
                 if (authenticated) {
                     authModal.style.display = 'none';
-                    startHeartbeat();
-                    if (data.apiModel) {
-                        showModelBadge(data.apiModel);
-                    }
-                } else {
-                    clearServerFiles();
-                    resetPreferenceState();
-                    updateFileList();
-                    showAuthModal();
-                    stopHeartbeat();
-                }
-                authError.style.display = 'none';
-                if (authenticated) {
+                    authError.style.display = 'none';
                     accessKeyInput.value = '';
-                    logoutBtn.title = currentUserId ? `当前用户: ${currentUserId}` : '退出';
+                    await showAuthenticatedView({
+                        role: nextRole,
+                        apiModel: data.apiModel || '',
+                        hydrateUserData: false
+                    });
+                } else {
+                    await showLoggedOutView();
                 }
                 return authenticated;
             } catch (error) {
                 resetPromptState();
-                clearServerFiles();
-                resetPreferenceState();
-                updateFileList();
-                currentUserId = '';
-                stopHeartbeat();
-                showAuthModal();
+                await showLoggedOutView();
                 return false;
             }
         }
@@ -697,22 +817,34 @@
                 }
 
                 const data = await response.json();
-                const nextUserId = typeof data.userId === 'string' ? data.userId : '';
-                if (!nextUserId || currentUserId !== nextUserId) {
+                const nextRole = data.role === 'admin' || data.role === 'user' ? data.role : '';
+                const nextUserId = nextRole === 'user' && typeof data.userId === 'string' ? data.userId : '';
+                const shouldResetWorkspace = currentRole !== nextRole
+                    || (currentUserId && currentUserId !== nextUserId)
+                    || nextRole === 'admin';
+
+                if (!nextRole || (nextRole === 'user' && !nextUserId)) {
+                    throw new Error('登录响应缺少角色信息');
+                }
+
+                if (!nextUserId || currentUserId !== nextUserId || currentRole !== nextRole) {
                     resetPromptState();
                 }
+                if (shouldResetWorkspace) {
+                    resetUserWorkspace();
+                }
+                currentRole = nextRole;
                 currentUserId = nextUserId;
-                await loadPreferences();
                 authError.style.display = 'none';
                 authModal.style.display = 'none';
-                logoutBtn.title = currentUserId ? `当前用户: ${currentUserId}` : '退出';
-                startHeartbeat();
-                if (data.apiModel) {
-                    showModelBadge(data.apiModel);
-                }
-                await fetchServerFileList();
-                updateFileList();
+                accessKeyInput.value = '';
+                await showAuthenticatedView({
+                    role: nextRole,
+                    apiModel: data.apiModel || '',
+                    hydrateUserData: nextRole === 'user'
+                });
             } catch (error) {
+                authError.textContent = error.message || '登录失败';
                 authError.style.display = 'block';
             }
         }
@@ -733,25 +865,7 @@
                 });
             } catch (error) {
             }
-
-            clearServerFiles();
-            currentUserId = '';
-            currentFileName = '';
-            currentFileContent = '';
-            currentConversationId = '';
-            creatingConversationPromise = null;
-            getLoadedFeatureModule('articleRenderer')?.resetState?.();
-            getLoadedFeatureModule('mindmap')?.resetState?.();
-            getLoadedFeatureModule('speech')?.resetState?.();
-            resetSummaryEvaluationState();
-            logoutBtn.title = '退出';
-            resetPromptState();
-            resetPreferenceState();
-            fileNameDisplay.textContent = '未选择文件';
-            textContent.innerHTML = defaultTextContentHtml;
-            clearChatPanel();
-            updateFileList();
-            await checkAuthStatus();
+            await showLoggedOutView();
         }
 
         async function fetchServerFileList() {
@@ -1343,6 +1457,7 @@
             }
         });
         logoutBtn.addEventListener('click', logout);
+        adminLogoutBtn?.addEventListener('click', logout);
 
         connectivityCheckBtn?.addEventListener('click', async () => {
             connectivityCheckBtn.disabled = true;
@@ -1516,14 +1631,14 @@
 
         window.addEventListener('load', async () => {
             const authenticated = await checkAuthStatus();
-            if (authenticated) {
+            if (authenticated && currentRole === 'user') {
                 await fetchServerFileList();
                 await loadPreferences();
             }
             updateFileList();
         });
         document.addEventListener('visibilitychange', () => {
-            if (!currentUserId) return;
+            if (currentRole !== 'user' || !currentUserId) return;
             if (document.visibilityState === 'visible') {
                 scheduleHeartbeat(0);
                 return;
@@ -1532,11 +1647,11 @@
             scheduleHeartbeat(HEARTBEAT_BACKGROUND_MS);
         });
         window.addEventListener('online', () => {
-            if (!currentUserId) return;
+            if (currentRole !== 'user' || !currentUserId) return;
             scheduleHeartbeat(0);
         });
         window.addEventListener('pagehide', () => {
-            if (!currentUserId) return;
+            if (currentRole !== 'user' || !currentUserId) return;
             void flushPreferencesSave();
         });
 
@@ -2597,11 +2712,15 @@
             getCurrentSelection: () => currentSelection,
             getCurrentFileName: () => currentFileName,
             getCurrentFileContent: () => currentFileContent,
+            getCurrentRole: () => currentRole,
             hashString,
             encodeStructuredData,
             decodeStructuredData,
             escapeHtml,
+            sanitizeAssistantHtml,
             dom: {
+                appShell,
+                adminShell,
                 fileList,
                 textContent,
                 moreFuncsSelect,

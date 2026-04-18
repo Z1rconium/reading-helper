@@ -82,6 +82,7 @@ function normalizeConversationSummary(row) {
   if (!row) return null;
   return {
     id: row.id,
+    articleName: row.articleName || '',
     title: row.title,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -113,6 +114,7 @@ async function listConversationSummaries(userId, articleName) {
     `
       SELECT
         id,
+        article_name AS articleName,
         title,
         created_at AS createdAt,
         updated_at AS updatedAt,
@@ -123,6 +125,29 @@ async function listConversationSummaries(userId, articleName) {
       ORDER BY updated_at DESC
     `
   ).all(userId, articleName);
+
+  return rows.map(normalizeConversationSummary);
+}
+
+async function listAllConversationSummaries(userId) {
+  const entry = await getDatabaseEntry(userId);
+  const rows = prepare(
+    entry,
+    'listAllConversationSummaries',
+    `
+      SELECT
+        id,
+        article_name AS articleName,
+        title,
+        created_at AS createdAt,
+        updated_at AS updatedAt,
+        message_count AS messageCount,
+        last_message_preview AS lastMessagePreview
+      FROM conversations
+      WHERE user_id = ?
+      ORDER BY article_name COLLATE NOCASE ASC, updated_at DESC
+    `
+  ).all(userId);
 
   return rows.map(normalizeConversationSummary);
 }
@@ -263,6 +288,7 @@ async function getConversationSummaryById(userId, articleName, conversationId) {
     `
       SELECT
         id,
+        article_name AS articleName,
         title,
         created_at AS createdAt,
         updated_at AS updatedAt,
@@ -272,6 +298,28 @@ async function getConversationSummaryById(userId, articleName, conversationId) {
       WHERE id = ? AND user_id = ? AND article_name = ?
     `
   ).get(conversationId, userId, articleName);
+
+  return normalizeConversationSummary(row);
+}
+
+async function getConversationSummaryByIdForUser(userId, conversationId) {
+  const entry = await getDatabaseEntry(userId);
+  const row = prepare(
+    entry,
+    'getConversationSummaryByIdForUser',
+    `
+      SELECT
+        id,
+        article_name AS articleName,
+        title,
+        created_at AS createdAt,
+        updated_at AS updatedAt,
+        message_count AS messageCount,
+        last_message_preview AS lastMessagePreview
+      FROM conversations
+      WHERE id = ? AND user_id = ?
+    `
+  ).get(conversationId, userId);
 
   return normalizeConversationSummary(row);
 }
@@ -286,6 +334,34 @@ async function getConversationRecord(userId, articleName, conversationId) {
   const interactions = prepare(
     entry,
     'getConversationRecord:messages',
+    `
+      SELECT role, content, timestamp
+      FROM messages
+      WHERE conversation_id = ?
+      ORDER BY seq ASC
+    `
+  ).all(conversationId).map((row) => ({
+    role: row.role,
+    content: row.content,
+    timestamp: row.timestamp
+  }));
+
+  return {
+    ...summary,
+    interactions
+  };
+}
+
+async function getConversationRecordById(userId, conversationId) {
+  const entry = await getDatabaseEntry(userId);
+  const summary = await getConversationSummaryByIdForUser(userId, conversationId);
+  if (!summary) {
+    return null;
+  }
+
+  const interactions = prepare(
+    entry,
+    'getConversationRecordById:messages',
     `
       SELECT role, content, timestamp
       FROM messages
@@ -521,11 +597,14 @@ function closeAllChatDatabases() {
 
 module.exports = {
   listConversationIds,
+  listAllConversationSummaries,
   listConversationSummaries,
   createConversationRecord,
   insertConversationIfAbsent,
   getConversationSummaryById,
+  getConversationSummaryByIdForUser,
   getConversationRecord,
+  getConversationRecordById,
   appendConversationMessageRecord,
   clearConversationRecord,
   deleteConversationRecord,

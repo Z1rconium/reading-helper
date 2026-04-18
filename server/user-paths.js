@@ -37,6 +37,10 @@ function getSessionStoreDir() {
   return path.join(getRuntimeDataRoot(), 'sessions');
 }
 
+function getAdminDataDir() {
+  return path.join(getRuntimeDataRoot(), 'admin');
+}
+
 function getUserDataRoot(userId) {
   return path.join(getDataRoot(), assertValidUserId(userId));
 }
@@ -57,6 +61,7 @@ module.exports = {
   assertValidUserId,
   getDataRoot,
   getRuntimeDataRoot,
+  getAdminDataDir,
   getSessionStoreDir,
   getUserDataRoot,
   getUserUploadDir,

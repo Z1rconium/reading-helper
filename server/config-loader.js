@@ -34,6 +34,14 @@ async function loadPlatformConfig() {
   };
 }
 
+async function loadAdminConfig() {
+  const fileName = 'admin.config.json';
+  const config = await readJsonConfig(fileName);
+  return {
+    accessKey: assertNonEmptyString(config.accessKey, 'accessKey', fileName)
+  };
+}
+
 function assertValidUserId(value, fieldName, fileName) {
   const userId = assertNonEmptyString(value, fieldName, fileName);
   if (!USER_ID_PATTERN.test(userId)) {
@@ -87,6 +95,7 @@ async function loadUsersConfig() {
 }
 
 module.exports = {
+  loadAdminConfig,
   loadPlatformConfig,
   loadUsersConfig,
   getConfigDir

@@ -32,6 +32,7 @@ rsync -a --delete \
   --exclude 'node_modules/' \
   --exclude 'data/' \
   --exclude 'logs/' \
+  --exclude 'config/admin.config.json' \
   --exclude 'config/platform.config.json' \
   --exclude 'config/users.config.json' \
   --exclude 'ecosystem.config.js' \
@@ -39,6 +40,7 @@ rsync -a --delete \
 
 echo "Update complete."
 echo "Preserved files:"
+echo "  - config/admin.config.json"
 echo "  - config/platform.config.json"
 echo "  - config/users.config.json"
 echo "  - ecosystem.config.js"

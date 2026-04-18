@@ -10,7 +10,12 @@ const path = require('path');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
 
-const { loadPlatformConfig, loadUsersConfig, getConfigDir } = require('./config-loader');
+const {
+  loadAdminConfig,
+  loadPlatformConfig,
+  loadUsersConfig,
+  getConfigDir
+} = require('./config-loader');
 const {
   MAX_UPLOAD_BYTES,
   hasAllowedTextExtension,
@@ -38,7 +43,20 @@ const { assertValidUserId } = require('./user-paths');
 const { createSessionStore } = require('./session-store');
 const { cleanupOrphanedUsers } = require('./cleanup-orphaned-users');
 const { csrfProtection, ensureCsrfToken, generateCsrfToken, setCsrfCookie } = require('./csrf-protection');
-const { closeAllChatDatabases } = require('./chat-db');
+const {
+  closeAllChatDatabases,
+  getConversationRecordById,
+  listAllConversationSummaries
+} = require('./chat-db');
+const {
+  closeAdminMetricsDatabase,
+  getAiUsageSummarySince,
+  getLoginCountSince,
+  listAiUsageEventsSince,
+  listLoginEventsSince,
+  recordAiUsageEvent,
+  recordLoginEvent
+} = require('./admin-metrics-store');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -133,15 +151,37 @@ function buildConnectSrcDirective() {
   return Array.from(new Set(sources)).join(' ');
 }
 
-function requireAuth(req, res, next) {
-  if (req.session && req.session.authenticated && typeof req.session.userId === 'string' && req.session.userId) {
+function getSessionUserId(req) {
+  return typeof req.session?.userId === 'string' ? req.session.userId.trim() : '';
+}
+
+function getSessionRole(req) {
+  return req.session?.role === 'admin' ? 'admin' : req.session?.role === 'user' ? 'user' : '';
+}
+
+function isAuthenticatedSession(req) {
+  const role = getSessionRole(req);
+  if (!req.session?.authenticated || !role) {
+    return false;
+  }
+  if (role === 'admin') {
+    return true;
+  }
+  return !!getSessionUserId(req);
+}
+
+function requireUserAuth(req, res, next) {
+  if (isAuthenticatedSession(req) && getSessionRole(req) === 'user') {
     return next();
   }
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
-function getSessionUserId(req) {
-  return typeof req.session?.userId === 'string' ? req.session.userId.trim() : '';
+function requireAdminAuth(req, res, next) {
+  if (isAuthenticatedSession(req) && getSessionRole(req) === 'admin') {
+    return next();
+  }
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 function getRequestedUserId(req) {
@@ -199,6 +239,36 @@ function sendSseChunk(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+function buildAuthResponse(req, usersById) {
+  if (!isAuthenticatedSession(req)) {
+    return {
+      authenticated: false,
+      role: null,
+      userId: null,
+      apiModel: null
+    };
+  }
+
+  const role = getSessionRole(req);
+  if (role === 'admin') {
+    return {
+      authenticated: true,
+      role: 'admin',
+      userId: null,
+      apiModel: null
+    };
+  }
+
+  const userId = getSessionUserId(req);
+  const user = usersById.get(userId);
+  return {
+    authenticated: true,
+    role: 'user',
+    userId: userId || null,
+    apiModel: user?.provider?.api_model || null
+  };
+}
+
 function isResponsesApi(apiUrl) {
   try {
     return new URL(apiUrl).pathname.endsWith('/responses');
@@ -214,6 +284,47 @@ function isAnthropicApi(apiUrl) {
   } catch {
     return apiUrl.includes('anthropic') || apiUrl.includes('/messages');
   }
+}
+
+function isChatCompletionsApi(apiUrl) {
+  try {
+    return new URL(apiUrl).pathname.includes('/chat/completions');
+  } catch {
+    return apiUrl.includes('/chat/completions');
+  }
+}
+
+function getProviderDescriptor(providerConfig) {
+  const apiUrl = String(providerConfig?.api_url || '').trim();
+  let host = '';
+
+  try {
+    host = new URL(apiUrl).hostname.toLowerCase();
+  } catch (_) {
+    host = '';
+  }
+
+  const providerKind = isAnthropicApi(apiUrl)
+    ? 'anthropic'
+    : isResponsesApi(apiUrl)
+      ? 'responses'
+      : isChatCompletionsApi(apiUrl)
+        ? 'chat-completions'
+        : 'custom';
+
+  const isOfficialOpenAI = host === 'api.openai.com' || host.endsWith('.openai.com');
+  const isOfficialAnthropic = host === 'api.anthropic.com' || host.endsWith('.anthropic.com');
+  const tokenTrackingSupported = (
+    (providerKind === 'responses' || providerKind === 'chat-completions') && isOfficialOpenAI
+  ) || (
+    providerKind === 'anthropic' && isOfficialAnthropic
+  );
+
+  return {
+    host,
+    providerKind,
+    tokenTrackingSupported
+  };
 }
 
 function buildUpstreamHeaders(providerConfig) {
@@ -234,12 +345,12 @@ function buildUpstreamHeaders(providerConfig) {
   return headers;
 }
 
-function buildUpstreamRequestBody(providerConfig, systemPrompt, userPrompt) {
+function buildUpstreamRequestBody(providerConfig, systemPrompt, userPrompt, providerDescriptor) {
   const effectiveSystemPrompt = typeof systemPrompt === 'string' && systemPrompt.trim()
     ? systemPrompt.trim()
     : DEFAULT_SYSTEM_PROMPT;
 
-  if (isAnthropicApi(providerConfig.api_url)) {
+  if (providerDescriptor.providerKind === 'anthropic') {
     return {
       model: providerConfig.api_model,
       max_tokens: 2000,
@@ -255,7 +366,7 @@ function buildUpstreamRequestBody(providerConfig, systemPrompt, userPrompt) {
     };
   }
 
-  if (isResponsesApi(providerConfig.api_url)) {
+  if (providerDescriptor.providerKind === 'responses') {
     return {
       model: providerConfig.api_model,
       instructions: effectiveSystemPrompt,
@@ -280,7 +391,12 @@ function buildUpstreamRequestBody(providerConfig, systemPrompt, userPrompt) {
     ],
     temperature: 0.3,
     max_tokens: 2000,
-    stream: true
+    stream: true,
+    ...(providerDescriptor.tokenTrackingSupported ? {
+      stream_options: {
+        include_usage: true
+      }
+    } : {})
   };
 }
 
@@ -386,6 +502,86 @@ function getUpstreamDelta(parsed) {
   return '';
 }
 
+function normalizeUsageToken(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return Math.round(parsed);
+}
+
+function normalizeUsagePayload(inputTokens, outputTokens, totalTokens) {
+  const normalizedInput = normalizeUsageToken(inputTokens);
+  const normalizedOutput = normalizeUsageToken(outputTokens);
+  let normalizedTotal = normalizeUsageToken(totalTokens);
+
+  if (normalizedTotal === null && normalizedInput !== null && normalizedOutput !== null) {
+    normalizedTotal = normalizedInput + normalizedOutput;
+  }
+
+  if (normalizedInput === null && normalizedOutput === null && normalizedTotal === null) {
+    return null;
+  }
+
+  return {
+    inputTokens: normalizedInput,
+    outputTokens: normalizedOutput,
+    totalTokens: normalizedTotal
+  };
+}
+
+function mergeUsagePayload(currentUsage, nextUsage) {
+  if (!nextUsage) {
+    return currentUsage || null;
+  }
+
+  return normalizeUsagePayload(
+    nextUsage.inputTokens ?? currentUsage?.inputTokens,
+    nextUsage.outputTokens ?? currentUsage?.outputTokens,
+    nextUsage.totalTokens ?? currentUsage?.totalTokens
+  );
+}
+
+function getUpstreamUsage(parsed) {
+  if (!parsed || typeof parsed !== 'object') {
+    return null;
+  }
+
+  if (parsed.type === 'message_start' && parsed.message?.usage) {
+    return normalizeUsagePayload(
+      parsed.message.usage.input_tokens,
+      parsed.message.usage.output_tokens,
+      parsed.message.usage.total_tokens
+    );
+  }
+
+  if (parsed.type === 'message_delta' && parsed.usage) {
+    return normalizeUsagePayload(
+      parsed.usage.input_tokens,
+      parsed.usage.output_tokens,
+      parsed.usage.total_tokens
+    );
+  }
+
+  if (parsed.type === 'response.completed' && parsed.response?.usage) {
+    return normalizeUsagePayload(
+      parsed.response.usage.input_tokens,
+      parsed.response.usage.output_tokens,
+      parsed.response.usage.total_tokens
+    );
+  }
+
+  if (parsed.usage && typeof parsed.usage === 'object') {
+    return normalizeUsagePayload(
+      parsed.usage.prompt_tokens ?? parsed.usage.input_tokens,
+      parsed.usage.completion_tokens ?? parsed.usage.output_tokens,
+      parsed.usage.total_tokens
+    );
+  }
+
+  return null;
+}
+
 async function loadCetWordList() {
   if (cetWordListCache !== null) {
     return cetWordListCache;
@@ -395,7 +591,7 @@ async function loadCetWordList() {
   return cetWordListCache;
 }
 
-function relayUpstreamChunk(chunk, res) {
+function relayUpstreamChunk(chunk, res, collector) {
   const lines = chunk.split('\n');
 
   for (const line of lines) {
@@ -413,8 +609,16 @@ function relayUpstreamChunk(chunk, res) {
 
     const errorMessage = getUpstreamError(parsed);
     if (errorMessage) {
+      if (collector && !collector.status) {
+        collector.status = 'stream_error';
+      }
       sendSseChunk(res, { error: errorMessage });
       continue;
+    }
+
+    const usage = getUpstreamUsage(parsed);
+    if (collector && usage) {
+      collector.usage = mergeUsagePayload(collector.usage, usage);
     }
 
     const delta = getUpstreamDelta(parsed);
@@ -448,13 +652,99 @@ function respondPromptStoreError(res, error) {
   return res.status(500).json({ error: error.message });
 }
 
+function get24HoursAgoIso() {
+  return new Date(Date.now() - (24 * 60 * 60 * 1000)).toISOString();
+}
+
+function groupConversationSummariesByArticle(conversations) {
+  const grouped = new Map();
+
+  for (const conversation of conversations) {
+    const articleName = conversation.articleName || '未分类文章';
+    if (!grouped.has(articleName)) {
+      grouped.set(articleName, []);
+    }
+    grouped.get(articleName).push({
+      id: conversation.id,
+      title: conversation.title,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
+      messageCount: conversation.messageCount,
+      lastMessagePreview: conversation.lastMessagePreview || ''
+    });
+  }
+
+  return Array.from(grouped.entries()).map(([articleName, articleConversations]) => ({
+    articleName,
+    conversations: articleConversations
+  }));
+}
+
+function getAdminTargetUser(req, res, usersById) {
+  const userId = typeof req.params?.userId === 'string' ? req.params.userId.trim() : '';
+
+  try {
+    assertValidUserId(userId);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+    return null;
+  }
+
+  const user = usersById.get(userId);
+  if (!user) {
+    res.status(404).json({ error: '用户不存在' });
+    return null;
+  }
+
+  return user;
+}
+
+function regenerateSession(req) {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function buildAdminUserSummary(user, sinceIso) {
+  const providerDescriptor = getProviderDescriptor(user.provider);
+  const [loginCount, aiUsageSummary] = await Promise.all([
+    getLoginCountSince(user.userId, sinceIso),
+    getAiUsageSummarySince(user.userId, sinceIso)
+  ]);
+
+  return {
+    userId: user.userId,
+    apiModel: user.provider?.api_model || null,
+    providerKind: providerDescriptor.providerKind,
+    loginCount,
+    apiCallCount: aiUsageSummary.apiCallCount,
+    tokenTrackingSupported: providerDescriptor.tokenTrackingSupported,
+    tokenTotals: providerDescriptor.tokenTrackingSupported ? {
+      inputTokens: aiUsageSummary.inputTokens,
+      outputTokens: aiUsageSummary.outputTokens,
+      totalTokens: aiUsageSummary.totalTokens
+    } : null
+  };
+}
+
 async function bootstrap() {
   const platformConfig = await loadPlatformConfig();
+  const adminConfig = await loadAdminConfig();
   const users = await loadUsersConfig();
   const { usersByAccessKey, usersById } = buildUserMaps(users);
   const sessionStore = await createSessionStore();
   const trustProxy = parseTrustProxy(TRUST_PROXY_ENV);
   const resolvedTrustProxy = trustProxy === null ? 1 : trustProxy;
+
+  if (usersByAccessKey.has(adminConfig.accessKey)) {
+    throw new Error('admin.config.json 中的 accessKey 不能与普通用户重复');
+  }
 
   // 清理不在配置文件中的用户数据（仅在 pm2 cluster 的第一个实例或非 cluster 模式下执行）
   const pmId = process.env.pm_id || process.env.NODE_APP_INSTANCE;
@@ -646,35 +936,51 @@ async function bootstrap() {
     }
 
     const user = inputKey ? usersByAccessKey.get(inputKey) : null;
+    const isAdminLogin = !!inputKey && inputKey === adminConfig.accessKey;
 
-    if (!user) {
+    if (!user && !isAdminLogin) {
       return res.status(401).json({ authenticated: false, error: 'Invalid key' });
     }
 
+    try {
+      await regenerateSession(req);
+    } catch (error) {
+      console.error('会话重建失败:', error);
+      return res.status(500).json({ authenticated: false, error: '会话初始化失败' });
+    }
+
     req.session.authenticated = true;
-    req.session.userId = user.userId;
+    req.session.role = isAdminLogin ? 'admin' : 'user';
+    req.session.userId = isAdminLogin ? '' : user.userId;
 
     const csrfToken = generateCsrfToken();
     setCsrfCookie(res, csrfToken);
 
-    return res.json({ authenticated: true, userId: user.userId, apiModel: user.provider?.api_model || null });
+    if (!isAdminLogin) {
+      try {
+        await recordLoginEvent(user.userId);
+      } catch (metricsError) {
+        console.error('[AdminMetrics] Failed to record login event:', metricsError.message);
+      }
+    }
+
+    return res.json(buildAuthResponse(req, usersById));
   });
 
   app.get('/api/auth/status', ensureCsrfToken, (req, res) => {
-    const authenticated = !!req.session?.authenticated && typeof req.session?.userId === 'string' && req.session.userId;
-    const user = authenticated ? usersById.get(req.session.userId) : null;
-    return res.json({
-      authenticated: !!authenticated,
-      userId: authenticated ? req.session.userId : null,
-      apiModel: user?.provider?.api_model || null
-    });
+    return res.json(buildAuthResponse(req, usersById));
   });
 
   app.post('/api/auth/logout', csrfProtection, (req, res) => {
     req.session.destroy(() => {
       res.clearCookie('reading_helper_sid');
       res.clearCookie('csrf_token');
-      res.json({ authenticated: false, userId: null });
+      res.json({
+        authenticated: false,
+        role: null,
+        userId: null,
+        apiModel: null
+      });
     });
   });
 
@@ -689,7 +995,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/files/upload', requireAuth, csrfProtection, (req, res, next) => {
+  app.post('/api/files/upload', requireUserAuth, csrfProtection, (req, res, next) => {
     upload.single('file')(req, res, (error) => {
       if (error) {
         return res.status(400).json({ error: error.message });
@@ -710,7 +1016,7 @@ async function bootstrap() {
     }
   });
 
-  app.get('/api/files', requireAuth, async (req, res) => {
+  app.get('/api/files', requireUserAuth, async (req, res) => {
     try {
       const files = await listUploadedTexts(req.session.userId);
       return res.json({ files });
@@ -719,7 +1025,7 @@ async function bootstrap() {
     }
   });
 
-  app.get('/api/files/:name', requireAuth, async (req, res) => {
+  app.get('/api/files/:name', requireUserAuth, async (req, res) => {
     const { name } = req.params;
     try {
       const content = await readUploadedText(req.session.userId, name);
@@ -735,7 +1041,7 @@ async function bootstrap() {
     }
   });
 
-  app.delete('/api/files/:name', requireAuth, csrfProtection, async (req, res) => {
+  app.delete('/api/files/:name', requireUserAuth, csrfProtection, async (req, res) => {
     const { name } = req.params;
     try {
       await deleteUploadedText(req.session.userId, name);
@@ -752,7 +1058,7 @@ async function bootstrap() {
     }
   });
 
-  app.get('/api/cet-word-list', requireAuth, async (req, res) => {
+  app.get('/api/cet-word-list', requireUserAuth, async (req, res) => {
     try {
       const content = await loadCetWordList();
       return res.json({ content });
@@ -764,7 +1070,7 @@ async function bootstrap() {
     }
   });
 
-  app.get('/api/prompts', requireAuth, async (req, res) => {
+  app.get('/api/prompts', requireUserAuth, async (req, res) => {
     const userId = validateRequestedUserId(req, res);
     if (!userId) return;
 
@@ -776,7 +1082,7 @@ async function bootstrap() {
     }
   });
 
-  app.get('/api/prompts/:name', requireAuth, async (req, res) => {
+  app.get('/api/prompts/:name', requireUserAuth, async (req, res) => {
     const { name } = req.params;
     const userId = validateRequestedUserId(req, res);
     if (!userId) return;
@@ -789,7 +1095,7 @@ async function bootstrap() {
     }
   });
 
-  app.put('/api/prompts/:name', requireAuth, csrfProtection, async (req, res) => {
+  app.put('/api/prompts/:name', requireUserAuth, csrfProtection, async (req, res) => {
     const { name } = req.params;
     const content = req.body?.content;
     const userId = validateRequestedUserId(req, res);
@@ -803,7 +1109,7 @@ async function bootstrap() {
     }
   });
 
-  app.get('/api/preferences', requireAuth, async (req, res) => {
+  app.get('/api/preferences', requireUserAuth, async (req, res) => {
     const userId = validateRequestedUserId(req, res);
     if (!userId) return;
 
@@ -815,7 +1121,7 @@ async function bootstrap() {
     }
   });
 
-  app.put('/api/preferences', requireAuth, csrfProtection, async (req, res) => {
+  app.put('/api/preferences', requireUserAuth, csrfProtection, async (req, res) => {
     const userId = validateRequestedUserId(req, res);
     if (!userId) return;
 
@@ -827,7 +1133,7 @@ async function bootstrap() {
     }
   });
 
-  app.get('/api/chats', requireAuth, async (req, res) => {
+  app.get('/api/chats', requireUserAuth, async (req, res) => {
     const articleName = getArticleNameFromQuery(req);
     if (!articleName) {
       return res.status(400).json({ error: 'fileName 不能为空' });
@@ -841,7 +1147,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/chats', requireAuth, csrfProtection, async (req, res) => {
+  app.post('/api/chats', requireUserAuth, csrfProtection, async (req, res) => {
     const articleName = getArticleNameFromQuery(req);
     if (!articleName) {
       return res.status(400).json({ error: 'fileName 不能为空' });
@@ -855,7 +1161,7 @@ async function bootstrap() {
     }
   });
 
-  app.get('/api/chats/:conversationId', requireAuth, async (req, res) => {
+  app.get('/api/chats/:conversationId', requireUserAuth, async (req, res) => {
     const articleName = getArticleNameFromQuery(req);
     const { conversationId } = req.params;
     if (!articleName) {
@@ -870,7 +1176,7 @@ async function bootstrap() {
     }
   });
 
-  app.delete('/api/chats/:conversationId', requireAuth, csrfProtection, async (req, res) => {
+  app.delete('/api/chats/:conversationId', requireUserAuth, csrfProtection, async (req, res) => {
     const articleName = getArticleNameFromQuery(req);
     const { conversationId } = req.params;
     if (!articleName) {
@@ -885,7 +1191,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/chats/:conversationId/messages', requireAuth, csrfProtection, async (req, res) => {
+  app.post('/api/chats/:conversationId/messages', requireUserAuth, csrfProtection, async (req, res) => {
     const articleName = getArticleNameFromQuery(req);
     const { conversationId } = req.params;
     const role = req.body?.role;
@@ -904,7 +1210,7 @@ async function bootstrap() {
     }
   });
 
-  app.delete('/api/chats/:conversationId/messages', requireAuth, csrfProtection, async (req, res) => {
+  app.delete('/api/chats/:conversationId/messages', requireUserAuth, csrfProtection, async (req, res) => {
     const articleName = getArticleNameFromQuery(req);
     const { conversationId } = req.params;
 
@@ -920,7 +1226,109 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/ai/chat/stream', requireAuth, csrfProtection, async (req, res) => {
+  app.get('/api/admin/users', requireAdminAuth, async (req, res) => {
+    const sinceIso = get24HoursAgoIso();
+
+    try {
+      const summaries = await Promise.all(users.map((user) => buildAdminUserSummary(user, sinceIso)));
+      return res.json({
+        users: summaries,
+        generatedAt: new Date().toISOString(),
+        windowHours: 24
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/admin/users/:userId/logins', requireAdminAuth, async (req, res) => {
+    const targetUser = getAdminTargetUser(req, res, usersById);
+    if (!targetUser) return;
+
+    const sinceIso = get24HoursAgoIso();
+
+    try {
+      const [totalCount, events] = await Promise.all([
+        getLoginCountSince(targetUser.userId, sinceIso),
+        listLoginEventsSince(targetUser.userId, sinceIso)
+      ]);
+
+      return res.json({
+        userId: targetUser.userId,
+        totalCount,
+        events,
+        windowHours: 24
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/admin/users/:userId/ai-usage', requireAdminAuth, async (req, res) => {
+    const targetUser = getAdminTargetUser(req, res, usersById);
+    if (!targetUser) return;
+
+    const sinceIso = get24HoursAgoIso();
+    const providerDescriptor = getProviderDescriptor(targetUser.provider);
+
+    try {
+      const [summary, events] = await Promise.all([
+        getAiUsageSummarySince(targetUser.userId, sinceIso),
+        listAiUsageEventsSince(targetUser.userId, sinceIso)
+      ]);
+
+      return res.json({
+        userId: targetUser.userId,
+        apiCallCount: summary.apiCallCount,
+        tokenTrackingSupported: providerDescriptor.tokenTrackingSupported,
+        tokenTotals: providerDescriptor.tokenTrackingSupported ? {
+          inputTokens: summary.inputTokens,
+          outputTokens: summary.outputTokens,
+          totalTokens: summary.totalTokens
+        } : null,
+        events,
+        windowHours: 24
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/admin/users/:userId/chats', requireAdminAuth, async (req, res) => {
+    const targetUser = getAdminTargetUser(req, res, usersById);
+    if (!targetUser) return;
+
+    try {
+      const conversations = await listAllConversationSummaries(targetUser.userId);
+      return res.json({
+        userId: targetUser.userId,
+        articles: groupConversationSummariesByArticle(conversations)
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/admin/users/:userId/chats/:conversationId', requireAdminAuth, async (req, res) => {
+    const targetUser = getAdminTargetUser(req, res, usersById);
+    if (!targetUser) return;
+
+    try {
+      const conversation = await getConversationRecordById(targetUser.userId, req.params.conversationId);
+      if (!conversation) {
+        return res.status(404).json({ error: '对话不存在' });
+      }
+
+      return res.json({
+        userId: targetUser.userId,
+        conversation
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/ai/chat/stream', requireUserAuth, csrfProtection, async (req, res) => {
     const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
     const systemPrompt = typeof req.body?.systemPrompt === 'string' ? req.body.systemPrompt : '';
     if (!prompt) {
@@ -932,6 +1340,22 @@ async function bootstrap() {
       return res.status(401).json({ error: '用户会话无效，请重新登录' });
     }
     const providerConfig = user.provider;
+    const providerDescriptor = getProviderDescriptor(providerConfig);
+    const metricsCollector = {
+      status: '',
+      usage: null
+    };
+    const aiUsageEvent = {
+      userId: user.userId,
+      occurredAt: new Date().toISOString(),
+      providerKind: providerDescriptor.providerKind,
+      model: providerConfig.api_model,
+      status: 'request_failed',
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null
+    };
+    let dispatchedUpstream = false;
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -942,8 +1366,9 @@ async function bootstrap() {
     const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
 
     try {
-      const requestBody = buildUpstreamRequestBody(providerConfig, systemPrompt, prompt);
+      const requestBody = buildUpstreamRequestBody(providerConfig, systemPrompt, prompt, providerDescriptor);
 
+      dispatchedUpstream = true;
       const upstreamResponse = await fetch(providerConfig.api_url, {
         method: 'POST',
         headers: buildUpstreamHeaders(providerConfig),
@@ -954,6 +1379,7 @@ async function bootstrap() {
 
       if (!upstreamResponse.ok || !upstreamResponse.body) {
         const errorText = await upstreamResponse.text();
+        aiUsageEvent.status = 'upstream_http_error';
         sendSseChunk(res, { error: errorText || `上游请求失败: ${upstreamResponse.status}` });
         res.write('data: [DONE]\n\n');
         return res.end();
@@ -979,30 +1405,45 @@ async function bootstrap() {
         buffer = chunks.pop() || '';
 
         for (const chunk of chunks) {
-          relayUpstreamChunk(chunk, res);
+          relayUpstreamChunk(chunk, res, metricsCollector);
         }
       }
 
       if (buffer.trim() !== '') {
-        relayUpstreamChunk(buffer, res);
+        relayUpstreamChunk(buffer, res, metricsCollector);
       }
 
+      aiUsageEvent.status = metricsCollector.status || 'completed';
       res.write('data: [DONE]\n\n');
       return res.end();
     } catch (error) {
       if (error.name === 'AbortError') {
+        aiUsageEvent.status = 'timeout';
         sendSseChunk(res, { error: 'AI 请求超时（120秒），请稍后重试' });
       } else {
+        aiUsageEvent.status = 'request_failed';
         sendSseChunk(res, { error: error.message || '流式请求失败' });
       }
       res.write('data: [DONE]\n\n');
       return res.end();
     } finally {
       clearTimeout(timeout);
+      if (dispatchedUpstream) {
+        const usage = providerDescriptor.tokenTrackingSupported ? metricsCollector.usage : null;
+        aiUsageEvent.inputTokens = usage?.inputTokens ?? null;
+        aiUsageEvent.outputTokens = usage?.outputTokens ?? null;
+        aiUsageEvent.totalTokens = usage?.totalTokens ?? null;
+
+        try {
+          await recordAiUsageEvent(aiUsageEvent);
+        } catch (metricsError) {
+          console.error('[AdminMetrics] Failed to record AI usage event:', metricsError.message);
+        }
+      }
     }
   });
 
-  app.post('/api/ai/connectivity-check', requireAuth, csrfProtection, async (req, res) => {
+  app.post('/api/ai/connectivity-check', requireUserAuth, csrfProtection, async (req, res) => {
     const user = usersById.get(req.session.userId);
     if (!user) {
       return res.status(401).json({ ok: false, error: '用户会话无效，请重新登录' });
@@ -1096,7 +1537,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/tts', requireAuth, csrfProtection, async (req, res) => {
+  app.post('/api/tts', requireUserAuth, csrfProtection, async (req, res) => {
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
     const voice = typeof req.body?.voice === 'string' ? req.body.voice.trim() : '';
     const rate = typeof req.body?.rate === 'string' ? req.body.rate.trim() : '';
@@ -1184,6 +1625,7 @@ async function bootstrap() {
     shuttingDown = true;
     console.log(`[Server] Received ${signal}, closing HTTP server...`);
     closeAllChatDatabases();
+    closeAdminMetricsDatabase();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 5000).unref();
   };
