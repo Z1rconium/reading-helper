@@ -282,7 +282,7 @@ function renderAiUsageDetail(data, user, options = {}) {
     ]
     : [
       { label: '查看用户', value: user.userId },
-      { label: '近24h API 调用', value: data?.apiCallCount ?? 0 },
+      { label: '历史 API 调用', value: data?.apiCallCount ?? 0 },
       { label: '模型支持 Token', value: data?.tokenTrackingSupported ? '是' : '否' }
     ];
 
@@ -292,8 +292,8 @@ function renderAiUsageDetail(data, user, options = {}) {
 
   const title = showTokens ? DETAIL_TYPES.tokens : DETAIL_TYPES.aiUsage;
   const subtitle = showTokens
-    ? '仅展示成功统计到 token usage 的调用事件。'
-    : '按 AI 请求次数统计，不包含文件、提示词、TTS 与连通性检测。';
+    ? '展示全部历史中成功统计到 token usage 的调用事件。'
+    : '按全部历史 AI 请求次数统计，不包含文件、提示词、TTS 与连通性检测。';
 
   const eventList = filteredEvents.length
     ? `
@@ -319,7 +319,7 @@ function renderAiUsageDetail(data, user, options = {}) {
         `).join('')}
       </div>
     `
-    : `<div class="admin-empty-inline">${showTokens ? '最近 24 小时没有可统计的 token 记录。' : '最近 24 小时没有 AI 调用记录。'}</div>`;
+    : `<div class="admin-empty-inline">${showTokens ? '当前没有可统计的历史 token 记录。' : '当前没有历史 AI 调用记录。'}</div>`;
 
   dom.detailTitle.textContent = `${user.userId} · ${title}`;
   dom.detailSubtitle.textContent = subtitle;

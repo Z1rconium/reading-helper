@@ -144,6 +144,27 @@ async function listLoginEventsSince(userId, since) {
   ).all(userId, normalizeTimestamp(since));
 }
 
+function normalizeAiUsageSummaryRow(row) {
+  return {
+    apiCallCount: Number(row?.apiCallCount || 0),
+    inputTokens: Number(row?.inputTokens || 0),
+    outputTokens: Number(row?.outputTokens || 0),
+    totalTokens: Number(row?.totalTokens || 0)
+  };
+}
+
+function normalizeAiUsageEventRows(rows) {
+  return rows.map((row) => ({
+    occurredAt: row.occurredAt,
+    providerKind: row.providerKind,
+    model: row.model,
+    status: row.status,
+    inputTokens: row.inputTokens === null ? null : Number(row.inputTokens),
+    outputTokens: row.outputTokens === null ? null : Number(row.outputTokens),
+    totalTokens: row.totalTokens === null ? null : Number(row.totalTokens)
+  }));
+}
+
 async function getAiUsageSummarySince(userId, since) {
   await getDatabase();
   const row = prepare(
@@ -159,17 +180,30 @@ async function getAiUsageSummarySince(userId, since) {
     `
   ).get(userId, normalizeTimestamp(since));
 
-  return {
-    apiCallCount: Number(row?.apiCallCount || 0),
-    inputTokens: Number(row?.inputTokens || 0),
-    outputTokens: Number(row?.outputTokens || 0),
-    totalTokens: Number(row?.totalTokens || 0)
-  };
+  return normalizeAiUsageSummaryRow(row);
+}
+
+async function getAiUsageSummary(userId) {
+  await getDatabase();
+  const row = prepare(
+    'getAiUsageSummary',
+    `
+      SELECT
+        COUNT(*) AS apiCallCount,
+        COALESCE(SUM(input_tokens), 0) AS inputTokens,
+        COALESCE(SUM(output_tokens), 0) AS outputTokens,
+        COALESCE(SUM(total_tokens), 0) AS totalTokens
+      FROM ai_usage_events
+      WHERE user_id = ?
+    `
+  ).get(userId);
+
+  return normalizeAiUsageSummaryRow(row);
 }
 
 async function listAiUsageEventsSince(userId, since) {
   await getDatabase();
-  return prepare(
+  const rows = prepare(
     'listAiUsageEventsSince',
     `
       SELECT
@@ -184,15 +218,31 @@ async function listAiUsageEventsSince(userId, since) {
       WHERE user_id = ? AND occurred_at >= ?
       ORDER BY occurred_at DESC, id DESC
     `
-  ).all(userId, normalizeTimestamp(since)).map((row) => ({
-    occurredAt: row.occurredAt,
-    providerKind: row.providerKind,
-    model: row.model,
-    status: row.status,
-    inputTokens: row.inputTokens === null ? null : Number(row.inputTokens),
-    outputTokens: row.outputTokens === null ? null : Number(row.outputTokens),
-    totalTokens: row.totalTokens === null ? null : Number(row.totalTokens)
-  }));
+  ).all(userId, normalizeTimestamp(since));
+
+  return normalizeAiUsageEventRows(rows);
+}
+
+async function listAiUsageEvents(userId) {
+  await getDatabase();
+  const rows = prepare(
+    'listAiUsageEvents',
+    `
+      SELECT
+        occurred_at AS occurredAt,
+        provider_kind AS providerKind,
+        model,
+        status,
+        input_tokens AS inputTokens,
+        output_tokens AS outputTokens,
+        total_tokens AS totalTokens
+      FROM ai_usage_events
+      WHERE user_id = ?
+      ORDER BY occurred_at DESC, id DESC
+    `
+  ).all(userId);
+
+  return normalizeAiUsageEventRows(rows);
 }
 
 function closeAdminMetricsDatabase() {
@@ -212,8 +262,10 @@ function closeAdminMetricsDatabase() {
 
 module.exports = {
   closeAdminMetricsDatabase,
+  getAiUsageSummary,
   getAiUsageSummarySince,
   getLoginCountSince,
+  listAiUsageEvents,
   listAiUsageEventsSince,
   listLoginEventsSince,
   recordAiUsageEvent,

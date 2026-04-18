@@ -50,9 +50,9 @@ const {
 } = require('./chat-db');
 const {
   closeAdminMetricsDatabase,
-  getAiUsageSummarySince,
+  getAiUsageSummary,
   getLoginCountSince,
-  listAiUsageEventsSince,
+  listAiUsageEvents,
   listLoginEventsSince,
   recordAiUsageEvent,
   recordLoginEvent
@@ -715,7 +715,7 @@ async function buildAdminUserSummary(user, sinceIso) {
   const providerDescriptor = getProviderDescriptor(user.provider);
   const [loginCount, aiUsageSummary] = await Promise.all([
     getLoginCountSince(user.userId, sinceIso),
-    getAiUsageSummarySince(user.userId, sinceIso)
+    getAiUsageSummary(user.userId)
   ]);
 
   return {
@@ -1268,13 +1268,12 @@ async function bootstrap() {
     const targetUser = getAdminTargetUser(req, res, usersById);
     if (!targetUser) return;
 
-    const sinceIso = get24HoursAgoIso();
     const providerDescriptor = getProviderDescriptor(targetUser.provider);
 
     try {
       const [summary, events] = await Promise.all([
-        getAiUsageSummarySince(targetUser.userId, sinceIso),
-        listAiUsageEventsSince(targetUser.userId, sinceIso)
+        getAiUsageSummary(targetUser.userId),
+        listAiUsageEvents(targetUser.userId)
       ]);
 
       return res.json({
@@ -1286,8 +1285,7 @@ async function bootstrap() {
           outputTokens: summary.outputTokens,
           totalTokens: summary.totalTokens
         } : null,
-        events,
-        windowHours: 24
+        events
       });
     } catch (error) {
       return res.status(500).json({ error: error.message });
