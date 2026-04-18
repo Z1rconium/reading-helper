@@ -439,6 +439,7 @@ function renderConversationPanel(container, options) {
 function setConversationExpanded(card, expanded) {
   const body = card?.querySelector('.admin-chat-body');
   const toggle = card?.querySelector('.admin-chat-toggle');
+  const scrollArea = card?.querySelector('.admin-chat-scroll-area');
   if (!card || !body || !toggle) return;
 
   card.classList.toggle('is-expanded', expanded);
@@ -447,6 +448,9 @@ function setConversationExpanded(card, expanded) {
 
   if (!expanded) {
     body.scrollTop = 0;
+    if (scrollArea) {
+      scrollArea.scrollTop = 0;
+    }
   }
 }
 
