@@ -2539,7 +2539,10 @@
             z-index: 1;
             flex: 1;
             min-height: 0;
-            overflow: auto;
+            overflow-x: hidden;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            scrollbar-gutter: stable;
             padding-right: 4px;
         }
 
@@ -2701,8 +2704,12 @@
 
         .admin-chat-body {
             padding: 0 18px 18px;
-            display: grid;
+            display: none;
             gap: 12px;
+        }
+
+        .admin-chat-card.is-expanded .admin-chat-body {
+            display: grid;
         }
 
         .admin-chat-body-head {
@@ -2752,9 +2759,6 @@
         }
 
         .admin-chat-scroll-area {
-            max-height: min(58vh, 720px);
-            overflow-y: auto;
-            padding-right: 6px;
             display: grid;
             gap: 12px;
         }

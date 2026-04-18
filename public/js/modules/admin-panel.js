@@ -364,7 +364,7 @@ function renderChatList(data, user) {
               <span class="admin-chat-meta">${appRef.escapeHtml(formatDateTime(conversation.updatedAt))} · ${appRef.escapeHtml(String(conversation.messageCount || 0))} 条消息</span>
               <span class="admin-chat-preview">${appRef.escapeHtml(conversation.lastMessagePreview || '点击查看完整对话')}</span>
             </button>
-            <div class="admin-chat-body" hidden></div>
+            <div class="admin-chat-body" aria-hidden="true"></div>
           </article>
         `).join('')}
       </div>
@@ -437,9 +437,13 @@ function setConversationExpanded(card, expanded) {
   const toggle = card?.querySelector('.admin-chat-toggle');
   if (!card || !body || !toggle) return;
 
-  body.hidden = !expanded;
   card.classList.toggle('is-expanded', expanded);
   toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  body.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+
+  if (!expanded) {
+    body.scrollTop = 0;
+  }
 }
 
 async function loadUsers() {
@@ -555,7 +559,7 @@ async function toggleConversation(userId, conversationId) {
   const body = card?.querySelector('.admin-chat-body');
   if (!card || !body) return;
 
-  const isExpanded = !body.hidden;
+  const isExpanded = card.classList.contains('is-expanded');
   if (isExpanded) {
     setConversationExpanded(card, false);
     return;
