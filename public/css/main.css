@@ -2476,6 +2476,12 @@
             box-shadow: 0 16px 36px rgba(0, 0, 0, 0.16);
         }
 
+        .admin-user-button.is-active:hover,
+        .admin-detail-type-button.is-active:hover {
+            transform: translateY(3px);
+            box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.22);
+        }
+
         .admin-user-button {
             display: grid;
             gap: 6px;
