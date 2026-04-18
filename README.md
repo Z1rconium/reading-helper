@@ -10,18 +10,20 @@ Reading Helper 是一个全栈 Web 应用，面向英语学习场景。用户上
 
 - 🔐 `accessKey` + Cloudflare Turnstile 登录校验
 - 👥 多用户目录与数据隔离（上传、提示词、聊天、偏好）
+- 👨‍💼 管理面板（用户管理、登录记录、AI 使用统计、聊天历史查看）
 - 💬 SQLite 聊天持久化（每篇文章多会话）+ 旧 JSON 自动迁移
 - 🤖 支持 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / 自定义兼容端点
 - ⚡ AI SSE 流式输出与错误透传映射
 - ⚡ `/api/ai/chat/stream` 与 `/api/tts` 默认跳过 `compression`，优化流式首包延迟
 - 🩺 AI 连通性一键检测（`errorCode + message + summary`）
+- 📊 管理员指标追踪（登录事件、AI 使用量、Token 统计）
 - 📝 用户级提示词模板管理
 - 📝 `/api/files` 与 `/api/prompts` 列表接口返回文件名数组，前端本地增量维护列表
 - 🎯 CET4/CET6 词汇标注
 - 🔊 Edge TTS + 浏览器本地语音回退（非 Safari 下 Edge 不可用时自动回退）
 - 🧠 思维导图可视化（D3 + markmap，含渲染缓存与缩放/折叠状态优化）
 - 🧩 开放题、选择题、判断题、语法树等结构化输出渲染
-- 🚀 前端按需模块化加载（`article-renderer`、`speech`、`mindmap`、`quiz`、`prompt-manager`）与交互预热
+- 🚀 前端按需模块化加载（`article-renderer`、`speech`、`mindmap`、`quiz`、`prompt-manager`、`admin-panel`）与交互预热
 - 🧼 assistant 内容在最终渲染阶段统一清洗，避免后端重复清洗开销
 - 💾 偏好设置前端合并写 + 后端去重落盘，减少重复写入
 - 🔒 CSRF 保护、登录限流、CSP 与会话隔离
@@ -32,7 +34,7 @@ Reading Helper 是一个全栈 Web 应用，面向英语学习场景。用户上
 - Node.js >= 18
 - Express
 - Redis + `connect-redis`（会话）
-- SQLite + `better-sqlite3`（聊天）
+- SQLite + `better-sqlite3`（聊天 + 管理员指标）
 - Multer（上传）
 - compression（HTTP 压缩）
 
@@ -89,6 +91,7 @@ reading-helper/
 │   ├── chat-db.js
 │   ├── chat-migrate.js
 │   ├── preferences-store.js
+│   ├── admin-metrics-store.js
 │   ├── csrf-protection.js
 │   └── ...
 ├── public/
@@ -104,17 +107,21 @@ reading-helper/
 │           ├── speech.js
 │           ├── mindmap.js
 │           ├── quiz.js
-│           └── prompt-manager.js
+│           ├── prompt-manager.js
+│           └── admin-panel.js
 ├── config/
 │   ├── platform.config.json
 │   ├── users.config.json
+│   ├── admin.config.json
 │   ├── cet_word_list.txt
 │   └── prompts/*.md
-├── data/users/<userId>/
-│   ├── uploads/
-│   ├── chats/chat.sqlite
-│   ├── prompts/
-│   └── preferences.json
+├── data/
+│   ├── admin/admin.sqlite
+│   └── users/<userId>/
+│       ├── uploads/
+│       ├── chats/chat.sqlite
+│       ├── prompts/
+│       └── preferences.json
 ├── ecosystem.config.js
 └── package.json
 ```
@@ -154,7 +161,17 @@ export TURNSTILE_SECRET_KEY="your-cloudflare-turnstile-secret"
 }
 ```
 
-### 4) 启动
+### 4) 配置管理员（可选）
+
+编辑 `config/admin.config.json`：
+
+```json
+{
+  "accessKey": "your-admin-secret-key"
+}
+```
+
+### 5) 启动
 
 开发模式：
 
@@ -191,6 +208,7 @@ npm start
 | `TRUST_PROXY` | `1` | 反向代理信任级别 |
 | `TURNSTILE_SECRET_KEY` | - | Turnstile Secret |
 | `CF_TURNSTILE_SECRET_KEY` | - | Turnstile Secret 备用变量名 |
+| `ADMIN_DATA_DIR` | `./data/admin` | 管理员数据目录 |
 
 ## 部署说明
 
@@ -222,11 +240,13 @@ location / {
 - `public/index.html` 使用 `?v=...` 版本参数引用脚本
 - 生产环境对带 `v` 参数的 `.js/.css` 返回 `Cache-Control: immutable`
 
-## API（连通性检查）
+## API 文档
 
-### `POST /api/ai/connectivity-check`
+### 连通性检查
 
-用途：检查当前登录用户配置的上游 AI 端点可达性。
+**`POST /api/ai/connectivity-check`**
+
+检查当前登录用户配置的上游 AI 端点可达性。
 
 成功示例：
 
@@ -260,8 +280,35 @@ location / {
 - `NETWORK_ERROR`
 - `DNS_ERROR`
 
+### 管理面板 API
+
+**`POST /api/admin/login`**
+
+管理员登录，需提供 `accessKey` 和 Turnstile token。
+
+**`GET /api/admin/users`**
+
+获取所有用户列表及其基本信息。
+
+**`GET /api/admin/metrics/logins`**
+
+获取用户登录记录（支持分页和时间范围过滤）。
+
+**`GET /api/admin/metrics/ai-usage`**
+
+获取 AI 使用统计（Token 消耗、请求次数等）。
+
+**`GET /api/admin/chats/:userId`**
+
+获取指定用户的所有聊天会话列表。
+
+**`GET /api/admin/chats/:userId/:articleId/:conversationId`**
+
+获取指定用户的特定会话详细内容。
+
 ## 手动测试清单
 
+### 用户功能
 - [ ] 登录/登出（含 Turnstile）
 - [ ] 上传/读取/删除文章（含中文文件名）
 - [ ] 文件列表增量更新（无多余全量刷新）
@@ -274,6 +321,15 @@ location / {
 - [ ] CET 词汇标注开关
 - [ ] 思维导图渲染、折叠、缩放、全屏
 - [ ] 偏好设置去重保存（无重复落盘）
+
+### 管理面板功能
+- [ ] 管理员登录（独立于用户登录）
+- [ ] 用户列表展示（userId、最后登录时间、AI 使用量）
+- [ ] 登录记录查看（时间、用户、分页）
+- [ ] AI 使用统计（Token 消耗、请求次数、成功率）
+- [ ] 用户聊天历史查看（文章列表、会话列表）
+- [ ] 会话详情展示（折叠/展开、滚动行为）
+- [ ] 历史数据加载（跨天统计）
 
 ## 维护提示
 
