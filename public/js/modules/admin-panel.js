@@ -54,6 +54,12 @@ function bindEvents() {
   });
 
   dom.detailContent?.addEventListener('click', (event) => {
+    const collapseButton = event.target.closest('.admin-chat-collapse');
+    if (collapseButton && dom.detailContent.contains(collapseButton)) {
+      void toggleConversation(collapseButton.dataset.userId || '', collapseButton.dataset.conversationId || '');
+      return;
+    }
+
     const button = event.target.closest('.admin-chat-toggle');
     if (!button || !dom.detailContent.contains(button)) return;
     void toggleConversation(button.dataset.userId || '', button.dataset.conversationId || '');
@@ -352,6 +358,7 @@ function renderChatList(data, user) {
               class="admin-chat-toggle"
               data-user-id="${appRef.escapeHtml(user.userId)}"
               data-conversation-id="${appRef.escapeHtml(conversation.id)}"
+              aria-expanded="false"
             >
               <span class="admin-chat-title">${appRef.escapeHtml(conversation.title || '新对话')}</span>
               <span class="admin-chat-meta">${appRef.escapeHtml(formatDateTime(conversation.updatedAt))} · ${appRef.escapeHtml(String(conversation.messageCount || 0))} 条消息</span>
@@ -366,28 +373,73 @@ function renderChatList(data, user) {
 }
 
 function renderConversationDetail(container, conversation) {
+  const toggleButton = container.previousElementSibling;
+  const conversationId = conversation?.id || toggleButton?.dataset.conversationId || '';
+  const userId = toggleButton?.dataset.userId || '';
   const interactions = Array.isArray(conversation?.interactions) ? conversation.interactions : [];
-  if (!interactions.length) {
-    container.innerHTML = '<div class="admin-empty-inline">该会话暂无消息内容。</div>';
-    return;
-  }
+  const title = conversation?.title || '新对话';
+  const contentHtml = interactions.length
+    ? interactions.map((interaction) => {
+      const role = interaction.role === 'assistant' ? 'assistant' : 'user';
+      const messageHtml = role === 'assistant'
+        ? appRef.sanitizeAssistantHtml(interaction.content)
+        : `<p>${appRef.escapeHtml(interaction.content)}</p>`;
 
-  container.innerHTML = interactions.map((interaction) => {
-    const role = interaction.role === 'assistant' ? 'assistant' : 'user';
-    const contentHtml = role === 'assistant'
-      ? appRef.sanitizeAssistantHtml(interaction.content)
-      : `<p>${appRef.escapeHtml(interaction.content)}</p>`;
+      return `
+        <article class="admin-message admin-message-${role}">
+          <div class="admin-message-head">
+            <span class="admin-message-role">${role === 'assistant' ? 'Assistant' : 'User'}</span>
+            <span class="admin-message-time">${appRef.escapeHtml(formatDateTime(interaction.timestamp))}</span>
+          </div>
+          <div class="admin-message-body">${messageHtml}</div>
+        </article>
+      `;
+    }).join('')
+    : '<div class="admin-empty-inline">该会话暂无消息内容。</div>';
 
-    return `
-      <article class="admin-message admin-message-${role}">
-        <div class="admin-message-head">
-          <span class="admin-message-role">${role === 'assistant' ? 'Assistant' : 'User'}</span>
-          <span class="admin-message-time">${appRef.escapeHtml(formatDateTime(interaction.timestamp))}</span>
-        </div>
-        <div class="admin-message-body">${contentHtml}</div>
-      </article>
-    `;
-  }).join('');
+  renderConversationPanel(container, {
+    userId,
+    conversationId,
+    metaText: `${title} · ${interactions.length} 条消息`,
+    contentHtml
+  });
+}
+
+function renderConversationPanel(container, options) {
+  const userId = options?.userId || '';
+  const conversationId = options?.conversationId || '';
+  const metaText = options?.metaText || '完整对话';
+  const contentHtml = options?.contentHtml || '<div class="admin-empty-inline">暂无内容。</div>';
+
+  container.innerHTML = `
+    <div class="admin-chat-body-head">
+      <div class="admin-chat-body-summary">
+        <span class="admin-chat-body-label">完整对话</span>
+        <span class="admin-chat-body-meta">${appRef.escapeHtml(metaText)}</span>
+      </div>
+      <button
+        type="button"
+        class="admin-chat-collapse"
+        data-user-id="${appRef.escapeHtml(userId)}"
+        data-conversation-id="${appRef.escapeHtml(conversationId)}"
+      >
+        收起
+      </button>
+    </div>
+    <div class="admin-chat-scroll-area">
+      ${contentHtml}
+    </div>
+  `;
+}
+
+function setConversationExpanded(card, expanded) {
+  const body = card?.querySelector('.admin-chat-body');
+  const toggle = card?.querySelector('.admin-chat-toggle');
+  if (!card || !body || !toggle) return;
+
+  body.hidden = !expanded;
+  card.classList.toggle('is-expanded', expanded);
+  toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
 }
 
 async function loadUsers() {
@@ -505,20 +557,28 @@ async function toggleConversation(userId, conversationId) {
 
   const isExpanded = !body.hidden;
   if (isExpanded) {
-    body.hidden = true;
-    card.classList.remove('is-expanded');
+    setConversationExpanded(card, false);
     return;
   }
 
-  body.hidden = false;
-  card.classList.add('is-expanded');
-  body.innerHTML = '<div class="admin-empty-inline">正在加载会话内容...</div>';
+  setConversationExpanded(card, true);
+  renderConversationPanel(body, {
+    userId,
+    conversationId,
+    metaText: '正在加载会话内容...',
+    contentHtml: '<div class="admin-empty-inline">正在加载会话内容...</div>'
+  });
 
   try {
     const data = await loadConversation(userId, conversationId);
     renderConversationDetail(body, data?.conversation);
   } catch (error) {
-    body.innerHTML = `<div class="admin-empty-inline">${appRef.escapeHtml(error.message || '会话加载失败')}</div>`;
+    renderConversationPanel(body, {
+      userId,
+      conversationId,
+      metaText: '会话加载失败',
+      contentHtml: `<div class="admin-empty-inline">${appRef.escapeHtml(error.message || '会话加载失败')}</div>`
+    });
   }
 }
 
