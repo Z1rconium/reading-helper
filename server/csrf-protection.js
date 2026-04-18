@@ -48,28 +48,23 @@ function parseOriginLikeHeader(value) {
   }
 }
 
-function isSameOriginRequest(req) {
+function hasMismatchedOrigin(req) {
   const requestOrigin = getRequestOrigin(req);
   if (!requestOrigin) {
     return false;
   }
 
-  const secFetchSite = String(req.get('sec-fetch-site') || '').trim().toLowerCase();
-  if (secFetchSite && !['same-origin', 'same-site', 'none'].includes(secFetchSite)) {
-    return false;
-  }
-
   const origin = parseOriginLikeHeader(req.get('origin'));
   if (origin) {
-    return origin === requestOrigin;
+    return origin !== requestOrigin;
   }
 
   const refererOrigin = parseOriginLikeHeader(req.get('referer'));
   if (refererOrigin) {
-    return refererOrigin === requestOrigin;
+    return refererOrigin !== requestOrigin;
   }
 
-  return secFetchSite === 'same-origin' || secFetchSite === 'same-site' || secFetchSite === 'none';
+  return false;
 }
 
 function csrfProtection(req, res, next) {
@@ -80,19 +75,19 @@ function csrfProtection(req, res, next) {
   const cookieToken = getCsrfTokenFromCookie(req);
   const headerToken = getCsrfTokenFromHeader(req);
 
-  if (cookieToken && headerToken && cookieToken === headerToken) {
-    return next();
-  }
-
-  if (isSameOriginRequest(req)) {
-    return next();
-  }
-
   if (!cookieToken || !headerToken) {
     return res.status(403).json({ error: 'CSRF token 缺失' });
   }
 
-  return res.status(403).json({ error: 'CSRF token 验证失败' });
+  if (cookieToken !== headerToken) {
+    return res.status(403).json({ error: 'CSRF token 验证失败' });
+  }
+
+  if (hasMismatchedOrigin(req)) {
+    return res.status(403).json({ error: '请求来源非法' });
+  }
+
+  return next();
 }
 
 function ensureCsrfToken(req, res, next) {
@@ -113,5 +108,5 @@ module.exports = {
   setCsrfCookie,
   CSRF_COOKIE_NAME,
   getRequestOrigin,
-  isSameOriginRequest
+  hasMismatchedOrigin
 };

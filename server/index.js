@@ -4,7 +4,6 @@ const fs = require('fs/promises');
 const express = require('express');
 const session = require('express-session');
 const rateLimit = require('express-rate-limit');
-const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const cookieParser = require('cookie-parser');
@@ -926,7 +925,6 @@ async function bootstrap() {
     next();
   });
 
-  app.use(cors({ origin: true, credentials: true }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false }));
   app.use(cookieParser());
@@ -961,7 +959,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/auth/login', loginRateLimiter, async (req, res) => {
+  app.post('/api/auth/login', loginRateLimiter, csrfProtection, async (req, res) => {
     const inputKey = typeof req.body?.accessKey === 'string' ? req.body.accessKey.trim() : '';
     const turnstileToken =
       typeof req.body?.turnstileToken === 'string'
