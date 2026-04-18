@@ -2435,6 +2435,12 @@
             padding-right: 4px;
         }
 
+        .admin-scroll-region::-webkit-scrollbar-thumb:hover {
+            background: rgba(120, 109, 92, 0.32);
+            border: 2px solid transparent;
+            background-clip: padding-box;
+        }
+
         .admin-user-list,
         .admin-detail-type-list {
             list-style: none;
@@ -2475,6 +2481,13 @@
             gap: 6px;
             padding: 16px 18px;
             text-align: left;
+        }
+
+        .admin-user-list .admin-user-button:hover {
+            border-color: rgba(170, 208, 227, 0.12);
+            background: rgba(255, 255, 255, 0.035);
+            box-shadow: none;
+            transform: none;
         }
 
         .admin-user-name,
