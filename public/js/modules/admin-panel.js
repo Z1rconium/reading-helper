@@ -10,7 +10,8 @@ const state = {
   loginsCache: new Map(),
   conversationCache: new Map(),
   isSubmittingAddUser: false,
-  isSubmittingDeleteUser: false
+  isSubmittingDeleteUser: false,
+  isRefreshingAllData: false
 };
 
 const DETAIL_TYPES = {
@@ -44,6 +45,7 @@ function cacheDom() {
   dom.detailSubtitle = document.getElementById('admin-detail-subtitle');
   dom.detailContent = document.getElementById('admin-detail-content');
   dom.selectedUserSummary = document.getElementById('admin-selected-user-summary');
+  dom.refreshAllBtn = document.getElementById('admin-refresh-all-btn');
   dom.addUserBtn = document.getElementById('admin-add-user-btn');
   dom.deleteUserBtn = document.getElementById('admin-delete-user-btn');
 
@@ -100,6 +102,9 @@ function bindEvents() {
   dom.addUserBtn?.addEventListener('click', () => {
     openAddUserModal();
   });
+  dom.refreshAllBtn?.addEventListener('click', () => {
+    void handleRefreshAllData();
+  });
   dom.deleteUserBtn?.addEventListener('click', () => {
     openDeleteUserModal();
   });
@@ -144,6 +149,7 @@ function resetState() {
   state.selectedDetailKey = 'chats';
   state.isSubmittingAddUser = false;
   state.isSubmittingDeleteUser = false;
+  state.isRefreshingAllData = false;
   clearAdminCaches();
 }
 
@@ -266,8 +272,17 @@ function buildUserSummaryText(user) {
 }
 
 function updateUserActionButtons() {
+  const disableToolbarActions = state.isRefreshingAllData || state.isSubmittingAddUser || state.isSubmittingDeleteUser;
+
+  if (dom.addUserBtn) {
+    dom.addUserBtn.disabled = disableToolbarActions;
+  }
   if (dom.deleteUserBtn) {
-    dom.deleteUserBtn.disabled = state.users.length === 0;
+    dom.deleteUserBtn.disabled = disableToolbarActions || state.users.length === 0;
+  }
+  if (dom.refreshAllBtn) {
+    dom.refreshAllBtn.disabled = disableToolbarActions || state.users.length === 0;
+    dom.refreshAllBtn.textContent = state.isRefreshingAllData ? '刷新中...' : '刷新全部数据';
   }
 }
 
@@ -585,7 +600,10 @@ function cacheRequest(cache, key, loader) {
   return cache.get(key);
 }
 
-async function loadChats(userId) {
+async function loadChats(userId, options = {}) {
+  if (options.forceReload) {
+    state.chatsCache.delete(userId);
+  }
   return cacheRequest(
     state.chatsCache,
     userId,
@@ -593,7 +611,10 @@ async function loadChats(userId) {
   );
 }
 
-async function loadLogins(userId) {
+async function loadLogins(userId, options = {}) {
+  if (options.forceReload) {
+    state.loginsCache.delete(userId);
+  }
   return cacheRequest(
     state.loginsCache,
     userId,
@@ -601,7 +622,10 @@ async function loadLogins(userId) {
   );
 }
 
-async function loadAiUsage(userId) {
+async function loadAiUsage(userId, options = {}) {
+  if (options.forceReload) {
+    state.aiUsageCache.delete(userId);
+  }
   return cacheRequest(
     state.aiUsageCache,
     userId,
@@ -616,6 +640,14 @@ async function loadConversation(userId, conversationId) {
     cacheKey,
     () => fetchAdminJson(`/api/admin/users/${encodeURIComponent(userId)}/chats/${encodeURIComponent(conversationId)}`)
   );
+}
+
+async function preloadUserDetailData(userId, options = {}) {
+  await Promise.all([
+    loadChats(userId, options),
+    loadLogins(userId, options),
+    loadAiUsage(userId, options)
+  ]);
 }
 
 async function renderCurrentDetail() {
@@ -714,6 +746,7 @@ function setModalError(element, message = '') {
 
 function setAddUserSubmitting(isSubmitting) {
   state.isSubmittingAddUser = isSubmitting;
+  updateUserActionButtons();
   if (dom.addUserSubmitBtn) {
     dom.addUserSubmitBtn.disabled = isSubmitting;
     dom.addUserSubmitBtn.textContent = isSubmitting ? '保存中...' : '保存用户';
@@ -725,6 +758,7 @@ function setAddUserSubmitting(isSubmitting) {
 
 function setDeleteUserSubmitting(isSubmitting) {
   state.isSubmittingDeleteUser = isSubmitting;
+  updateUserActionButtons();
   if (dom.deleteUserSubmitBtn) {
     dom.deleteUserSubmitBtn.disabled = isSubmitting;
     dom.deleteUserSubmitBtn.textContent = isSubmitting ? '删除中...' : '确认删除';
@@ -735,6 +769,11 @@ function setDeleteUserSubmitting(isSubmitting) {
   if (dom.deleteUserSelect) {
     dom.deleteUserSelect.disabled = isSubmitting;
   }
+}
+
+function setRefreshAllSubmitting(isSubmitting) {
+  state.isRefreshingAllData = isSubmitting;
+  updateUserActionButtons();
 }
 
 function openAddUserModal() {
@@ -869,6 +908,42 @@ async function refreshUsers(options = {}) {
   renderUserList();
   renderDetailTypeList();
   await renderCurrentDetail();
+}
+
+async function handleRefreshAllData() {
+  if (state.isRefreshingAllData || state.isSubmittingAddUser || state.isSubmittingDeleteUser) {
+    return;
+  }
+
+  const preferredUserId = state.selectedUserId;
+  renderLoading('正在刷新全部用户的全部项目数据...');
+  setRefreshAllSubmitting(true);
+
+  try {
+    await loadUsers();
+    clearAdminCaches();
+    renderUserList();
+
+    if (!state.users.length) {
+      state.selectedUserId = '';
+      state.selectedDetailKey = 'chats';
+      renderDetailTypeList();
+      renderEmpty('没有可管理用户', '当前配置中还没有普通用户，可通过右上角按钮直接添加。');
+      return;
+    }
+
+    const nextSelectedUser = state.users.find((user) => user.userId === preferredUserId) || state.users[0];
+    state.selectedUserId = nextSelectedUser.userId;
+    renderUserList();
+    renderDetailTypeList();
+
+    await Promise.all(state.users.map((user) => preloadUserDetailData(user.userId, { forceReload: true })));
+    await renderCurrentDetail();
+  } catch (error) {
+    renderError(error.message || '全量刷新失败');
+  } finally {
+    setRefreshAllSubmitting(false);
+  }
 }
 
 async function handleAddUserSubmit() {
