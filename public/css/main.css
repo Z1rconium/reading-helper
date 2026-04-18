@@ -2456,14 +2456,6 @@
             transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
         }
 
-        .admin-user-button:hover,
-        .admin-detail-type-button:hover {
-            transform: translateY(3px);
-            border-color: rgba(150, 216, 245, 0.28);
-            background: rgba(255, 255, 255, 0.06);
-            box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.22);
-        }
-
         .admin-logout-btn:hover {
             transform: translateY(3px);
             border-color: rgba(150, 216, 245, 0.28);
