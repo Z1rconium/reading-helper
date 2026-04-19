@@ -2641,6 +2641,28 @@
             return '';
         }
 
+        function splitSseBuffer(buffer) {
+            const source = String(buffer || '');
+            const events = [];
+            let start = 0;
+            let match = source.match(/\r?\n\r?\n/);
+
+            while (match) {
+                const index = match.index;
+                events.push(source.slice(start, index));
+                start = index + match[0].length;
+                match = source.slice(start).match(/\r?\n\r?\n/);
+                if (match) {
+                    match.index += start;
+                }
+            }
+
+            return {
+                events,
+                rest: source.slice(start)
+            };
+        }
+
         const STRUCTURED_STREAM_OPERATIONS = new Set(['mindmap', 'mcqs', 'tf', 'questions', 'structure']);
         const STREAM_RENDER_THROTTLE_MS = 250;
         let chatScrollFrame = 0;
@@ -2820,10 +2842,10 @@
                     if (done) break;
 
                     buffer += decoder.decode(value, { stream: true });
-                    const chunks = buffer.split('\n\n');
-                    buffer = chunks.pop();
+                    const { events, rest } = splitSseBuffer(buffer);
+                    buffer = rest;
 
-                    for (const chunk of chunks) {
+                    for (const chunk of events) {
                         if (chunk.trim() === '') continue;
 
                         const lines = chunk.split('\n');

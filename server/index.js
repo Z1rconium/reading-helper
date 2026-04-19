@@ -79,7 +79,7 @@ const TRUST_PROXY_ENV = process.env.TRUST_PROXY;
 const AI_REQUEST_TIMEOUT_MS = 120000; // 120 秒超时
 const CONNECTIVITY_TIMEOUT_MS = 10000;
 const TTS_REQUEST_TIMEOUT_MS = 30000;
-const MAX_SSE_BUFFER_SIZE = 10 * 1024; // 10KB
+const MAX_SSE_EVENT_SIZE = 512 * 1024; // 512KB，防止异常上游无限堆积未完成事件
 const MAX_CONNECTIVITY_SUMMARY_LENGTH = 120;
 const EDGE_TTS_ENDPOINT = (() => {
   const value = typeof process.env.EDGE_TTS_ENDPOINT === 'string' ? process.env.EDGE_TTS_ENDPOINT.trim() : '';
@@ -230,6 +230,28 @@ function validateRequestedUserId(req, res) {
 
 function sendSseChunk(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function splitSseBuffer(buffer) {
+  const source = String(buffer || '');
+  const events = [];
+  let start = 0;
+  let separatorMatch = source.match(/\r?\n\r?\n/);
+
+  while (separatorMatch) {
+    const index = separatorMatch.index;
+    events.push(source.slice(start, index));
+    start = index + separatorMatch[0].length;
+    separatorMatch = source.slice(start).match(/\r?\n\r?\n/);
+    if (separatorMatch) {
+      separatorMatch.index += start;
+    }
+  }
+
+  return {
+    events,
+    rest: source.slice(start)
+  };
 }
 
 function buildLoggedOutAuthResponse() {
@@ -1599,16 +1621,14 @@ async function bootstrap() {
 
         buffer += decoder.decode(value, { stream: true });
 
-        // #16 防止 buffer 过大
-        if (buffer.length > MAX_SSE_BUFFER_SIZE) {
-          console.warn('[SSE] Buffer overflow, resetting');
-          buffer = buffer.slice(-1024); // 只保留最后 1KB
+        if (buffer.length > MAX_SSE_EVENT_SIZE) {
+          throw new Error('上游 SSE 事件过大或未正确分块');
         }
 
-        const chunks = buffer.split('\n\n');
-        buffer = chunks.pop() || '';
+        const { events, rest } = splitSseBuffer(buffer);
+        buffer = rest;
 
-        for (const chunk of chunks) {
+        for (const chunk of events) {
           relayUpstreamChunk(chunk, res, metricsCollector);
         }
       }
