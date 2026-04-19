@@ -1,15 +1,75 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-device-tier="desktop">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>大学英语阅读助手 v2.3</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%234A90E2' width='100' height='100' rx='20'/><text x='50' y='70' font-size='60' text-anchor='middle' fill='white' font-family='Arial,sans-serif' font-weight='bold'>R</text></svg>">
-    <link rel="stylesheet" href="/css/main.css?v=20260418-7">
+    <script>
+        (function () {
+            function detectDeviceTier() {
+                const nav = window.navigator || {};
+                const ua = String(nav.userAgent || '');
+                const platform = String(nav.platform || '');
+                const maxTouchPoints = Number(nav.maxTouchPoints || 0);
+                const isIpad = /iPad/i.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1);
+                const isIphone = /iPhone|iPod/i.test(ua);
+                const isAndroid = /Android/i.test(ua);
+                const isAndroidMobile = isAndroid && /Mobile/i.test(ua);
+                const isAndroidTablet = isAndroid && !/Mobile/i.test(ua);
+                const isOtherTablet = /Tablet|PlayBook|Silk/i.test(ua);
+                const isTablet = isIpad || isAndroidTablet || isOtherTablet;
+                const isPhone = !isTablet && (isIphone || isAndroidMobile || /Mobile|Phone|Windows Phone/i.test(ua));
+                return isPhone ? 'phone' : isTablet ? 'tablet' : 'desktop';
+            }
+
+            function syncDeviceTier() {
+                const tier = detectDeviceTier();
+                document.documentElement.setAttribute('data-device-tier', tier);
+                return tier;
+            }
+
+            const deviceApi = window.readingHelperDevice || {};
+            deviceApi.detectDeviceTier = detectDeviceTier;
+            deviceApi.syncDeviceTier = syncDeviceTier;
+            deviceApi.getTier = function () {
+                return document.documentElement.getAttribute('data-device-tier') || syncDeviceTier();
+            };
+            deviceApi.isPhone = function () {
+                return deviceApi.getTier() === 'phone';
+            };
+            deviceApi.isTablet = function () {
+                return deviceApi.getTier() === 'tablet';
+            };
+            deviceApi.isDesktop = function () {
+                return deviceApi.getTier() === 'desktop';
+            };
+            window.readingHelperDevice = deviceApi;
+
+            syncDeviceTier();
+        })();
+    </script>
+    <link rel="stylesheet" href="/css/main.css?v=20260419-1">
 </head>
 
 <body>
+    <section id="phone-block-screen" class="device-block-screen" aria-live="polite" aria-hidden="true">
+        <div class="device-block-card">
+            <span class="device-block-kicker">Access Intercept</span>
+            <p class="device-block-alert">警告：阻止登录</p>
+            <h1>建议在 iPad 和 PC 端使用</h1>
+            <p class="device-block-copy">
+                当前设备被识别为手机端。为了保证阅读分栏、选词、段落操作和 AI 问答区的完整体验，手机端已暂停登录入口。
+            </p>
+            <p class="device-block-note">请改用 iPad 或电脑访问。</p>
+            <div class="device-block-badges">
+                <span>Phone blocked</span>
+                <span>Tablet ready</span>
+                <span>Desktop ready</span>
+            </div>
+        </div>
+    </section>
     <div class="app-shell">
         <div class="container">
             <aside class="file-history" id="file-history">
@@ -358,7 +418,7 @@
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
-    <script src="/js/app.js?v=20260418-7"></script>
-    <script type="module" src="/js/main.js?v=20260418-7"></script>
+    <script src="/js/app.js?v=20260419-1"></script>
+    <script type="module" src="/js/main.js?v=20260419-1"></script>
 </body>
 </html>

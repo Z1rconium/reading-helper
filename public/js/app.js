@@ -58,6 +58,38 @@
         const mindmapZoomInBtn = document.getElementById('mindmap-zoom-in');
         const mindmapZoomOutBtn = document.getElementById('mindmap-zoom-out');
         const mindmapFullscreenBtn = document.getElementById('mindmap-fullscreen');
+        const phoneBlockScreen = document.getElementById('phone-block-screen');
+        const deviceHelper = window.readingHelperDevice || null;
+
+        function syncDeviceTier() {
+            if (deviceHelper && typeof deviceHelper.syncDeviceTier === 'function') {
+                return deviceHelper.syncDeviceTier();
+            }
+            document.documentElement.setAttribute('data-device-tier', 'desktop');
+            return 'desktop';
+        }
+
+        function getDeviceTier() {
+            if (deviceHelper && typeof deviceHelper.getTier === 'function') {
+                return deviceHelper.getTier();
+            }
+            return document.documentElement.getAttribute('data-device-tier') || syncDeviceTier();
+        }
+
+        function isPhoneDevice() {
+            return getDeviceTier() === 'phone';
+        }
+
+        function isTabletDevice() {
+            return getDeviceTier() === 'tablet';
+        }
+
+        function isResizeHandleAvailable() {
+            if (!resizeHandle) return false;
+            return getComputedStyle(resizeHandle).display !== 'none';
+        }
+
+        syncDeviceTier();
 
         const featureModuleLoaders = new Map();
         const featureModules = new Map();
@@ -217,6 +249,7 @@
         let resizeStartWidth = 0;
         let resizeMinWidth = 0;
         let resizeMaxWidth = 0;
+        let activeResizePointerId = null;
 
         const authModal = document.getElementById('auth-modal');
         const accessKeyInput = document.getElementById('access-key');
@@ -559,7 +592,108 @@
             chatHistoryContextMenu.style.top = `${boundedTop}px`;
         }
 
+        function clearTextSelectionState(clearBrowserSelection = false) {
+            currentSelection = '';
+            selectedRange = null;
+            pContent = '';
+
+            if (clearBrowserSelection) {
+                const selection = window.getSelection();
+                selection?.removeAllRanges();
+            }
+        }
+
+        function getSelectionAnchorElement(node) {
+            if (!node) return null;
+            return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+        }
+
+        function isRangeInsideTextContent(range) {
+            const anchorElement = getSelectionAnchorElement(range?.commonAncestorContainer);
+            return !!anchorElement && textContent.contains(anchorElement);
+        }
+
+        function getParagraphElementFromRange(range) {
+            const anchorElement = getSelectionAnchorElement(range?.commonAncestorContainer);
+            return anchorElement?.closest ? anchorElement.closest('#text-content p') : null;
+        }
+
+        function updateSelectionStateFromRange(range) {
+            if (!(range instanceof Range) || !isRangeInsideTextContent(range)) {
+                return false;
+            }
+
+            const nextSelection = range.toString().trim();
+            const paragraphElement = getParagraphElementFromRange(range);
+            const nextParagraph = (paragraphElement?.innerText || '').trim();
+
+            if (!nextSelection || !nextParagraph || !nextParagraph.includes(nextSelection)) {
+                return false;
+            }
+
+            currentSelection = nextSelection;
+            selectedRange = range.cloneRange();
+            pContent = nextParagraph;
+            return true;
+        }
+
+        function syncSelectionState(options = {}) {
+            const {
+                preservePrevious = true,
+                clearBrowserSelection = false
+            } = options;
+
+            const selection = window.getSelection();
+            if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
+                const range = selection.getRangeAt(0);
+                if (updateSelectionStateFromRange(range)) {
+                    return true;
+                }
+            }
+
+            if (!preservePrevious) {
+                clearTextSelectionState(clearBrowserSelection);
+            }
+
+            return false;
+        }
+
+        function scheduleSelectionSync(preservePrevious = false) {
+            window.setTimeout(() => {
+                syncSelectionState({ preservePrevious });
+            }, 0);
+        }
+
+        function dismissAuthModal() {
+            accessKeyInput.value = '';
+            authModal.style.display = 'none';
+            authError.style.display = 'none';
+            resetCaptcha();
+        }
+
+        function showPhoneBlockedView() {
+            stopHeartbeat();
+            currentRole = '';
+            currentUserId = '';
+            setActiveShell('user');
+            hideModelBadge();
+            dismissAuthModal();
+            if (phoneBlockScreen) {
+                phoneBlockScreen.setAttribute('aria-hidden', 'false');
+            }
+        }
+
         function showAuthModal() {
+            syncDeviceTier();
+            if (isPhoneDevice()) {
+                showPhoneBlockedView();
+                return;
+            }
+
+            if (phoneBlockScreen) {
+                phoneBlockScreen.setAttribute('aria-hidden', 'true');
+            }
+
             accessKeyInput.value = '';
             authModal.style.display = 'flex';
             resetCaptcha();
@@ -679,6 +813,16 @@
                 apiModel = ''
             } = options;
 
+            syncDeviceTier();
+            if (isPhoneDevice()) {
+                showPhoneBlockedView();
+                return;
+            }
+
+            if (phoneBlockScreen) {
+                phoneBlockScreen.setAttribute('aria-hidden', 'true');
+            }
+
             if (role === 'admin') {
                 stopHeartbeat();
                 hideModelBadge();
@@ -727,10 +871,21 @@
             if (adminLogoutBtn) {
                 adminLogoutBtn.title = '退出';
             }
+            syncDeviceTier();
+            if (isPhoneDevice()) {
+                showPhoneBlockedView();
+                return;
+            }
             showAuthModal();
         }
 
         async function checkAuthStatus() {
+            syncDeviceTier();
+            if (isPhoneDevice()) {
+                showPhoneBlockedView();
+                return false;
+            }
+
             const previousRole = currentRole;
             const previousUserId = currentUserId;
             try {
@@ -757,9 +912,7 @@
                 currentRole = nextRole;
                 currentUserId = nextUserId;
                 if (authenticated) {
-                    authModal.style.display = 'none';
-                    authError.style.display = 'none';
-                    accessKeyInput.value = '';
+                    dismissAuthModal();
                     await showAuthenticatedView({
                         role: nextRole,
                         apiModel: data.apiModel || '',
@@ -777,6 +930,12 @@
         }
 
         async function login() {
+            syncDeviceTier();
+            if (isPhoneDevice()) {
+                showPhoneBlockedView();
+                return;
+            }
+
             const accessKey = accessKeyInput.value.trim();
             if (!accessKey) {
                 authError.textContent = '请输入访问 Key';
@@ -836,8 +995,7 @@
                 currentRole = nextRole;
                 currentUserId = nextUserId;
                 authError.style.display = 'none';
-                authModal.style.display = 'none';
-                accessKeyInput.value = '';
+                dismissAuthModal();
                 await showAuthenticatedView({
                     role: nextRole,
                     apiModel: data.apiModel || '',
@@ -1589,9 +1747,15 @@
         fileHistory.addEventListener('scroll', hideFileContextMenu);
         chatHistoryList.addEventListener('scroll', hideChatHistoryContextMenu);
         window.addEventListener('resize', () => {
+            syncDeviceTier();
             hideFileContextMenu();
             hideChatHistoryContextMenu();
-            if (window.matchMedia('(max-width: 820px)').matches) {
+            if (isPhoneDevice()) {
+                showPhoneBlockedView();
+            } else if (phoneBlockScreen) {
+                phoneBlockScreen.setAttribute('aria-hidden', 'true');
+            }
+            if (!isResizeHandleAvailable()) {
                 stopResize();
                 textPanel.style.flex = '';
             }
@@ -1630,6 +1794,7 @@
         }
 
         window.addEventListener('load', async () => {
+            syncDeviceTier();
             const authenticated = await checkAuthStatus();
             if (authenticated && currentRole === 'user') {
                 await fetchServerFileList();
@@ -1755,12 +1920,23 @@
             }
         });
 
-        resizeHandle.addEventListener('mousedown', (e) => {
-            if (window.matchMedia('(max-width: 820px)').matches) {
+        resizeHandle.addEventListener('pointerdown', (e) => {
+            if (!isResizeHandleAvailable()) {
+                return;
+            }
+
+            if (e.pointerType === 'mouse' && e.button !== 0) {
                 return;
             }
 
             isResizing = true;
+            activeResizePointerId = e.pointerId;
+            if (typeof resizeHandle.setPointerCapture === 'function') {
+                try {
+                    resizeHandle.setPointerCapture(e.pointerId);
+                } catch (error) {
+                }
+            }
             resizeHandle.style.backgroundColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#d46a3a';
             resizeStartX = e.clientX;
             resizeStartWidth = textPanel.getBoundingClientRect().width;
@@ -1775,25 +1951,40 @@
             }
 
             document.body.style.cursor = 'col-resize';
-            document.addEventListener('mousemove', handleResize);
-            document.addEventListener('mouseup', stopResize);
+            document.body.style.userSelect = 'none';
+            document.addEventListener('pointermove', handleResize);
+            document.addEventListener('pointerup', stopResize);
+            document.addEventListener('pointercancel', stopResize);
             e.preventDefault();
         });
 
         function handleResize(e) {
             if (!isResizing) return;
+            if (activeResizePointerId !== null && e.pointerId !== activeResizePointerId) return;
             const dx = e.clientX - resizeStartX;
             const nextWidth = resizeStartWidth + dx;
             const clampedWidth = Math.min(resizeMaxWidth, Math.max(resizeMinWidth, nextWidth));
             textPanel.style.flex = '0 0 ' + clampedWidth + 'px';
         }
 
-        function stopResize() {
+        function stopResize(e) {
+            if (!isResizing) return;
+            if (e && activeResizePointerId !== null && e.pointerId !== activeResizePointerId) return;
+
             isResizing = false;
+            if (activeResizePointerId !== null && resizeHandle?.hasPointerCapture?.(activeResizePointerId)) {
+                try {
+                    resizeHandle.releasePointerCapture(activeResizePointerId);
+                } catch (error) {
+                }
+            }
+            activeResizePointerId = null;
             resizeHandle.style.backgroundColor = '';
             document.body.style.cursor = '';
-            document.removeEventListener('mousemove', handleResize);
-            document.removeEventListener('mouseup', stopResize);
+            document.body.style.userSelect = '';
+            document.removeEventListener('pointermove', handleResize);
+            document.removeEventListener('pointerup', stopResize);
+            document.removeEventListener('pointercancel', stopResize);
         }
 
         // 字体大小控制
@@ -1818,22 +2009,16 @@
         }
 
 
-        // 监听文本选择
-        textContent.addEventListener('mouseup', function () {
-            const selection = window.getSelection();
-            if (!selection.isCollapsed) {
-                currentSelection = selection.toString().trim();
-                selectedRange = selection.getRangeAt(0);
-                const currentNode = selectedRange.startContainer.parentNode;
-                pContent = (currentNode.nodeName === 'SPAN') ? currentNode.parentNode.innerText : currentNode.innerText;
-                if (!pContent.includes(currentSelection)) {
-                    window.getSelection().removeAllRanges();
-                    currentSelection = '';
-                    selectedRange = null;
-                    pContent = '';
-                }
-            }
+        function handleSelectionCommit() {
+            scheduleSelectionSync(false);
+        }
+
+        document.addEventListener('selectionchange', () => {
+            syncSelectionState({ preservePrevious: true });
         });
+        textContent.addEventListener('pointerup', handleSelectionCommit);
+        textContent.addEventListener('touchend', handleSelectionCommit, { passive: true });
+        textContent.addEventListener('mouseup', handleSelectionCommit);
 
         async function callFeaturePrompt(fileName, variables, userPrompt, loadingText, operation, forceRefresh = false) {
             await ensureOperationRenderer(operation);
@@ -1856,6 +2041,7 @@
 
         // 解释单词
         document.getElementById('explain-word').addEventListener('click', async function () {
+            syncSelectionState({ preservePrevious: true });
             if (!currentSelection) return;
             resetSummaryEvaluationState();
             addUserMessage(`请解释单词: "${currentSelection}"`);
@@ -1875,6 +2061,7 @@
 
         // 分析句子
         document.getElementById('analyze-sentence').addEventListener('click', async function () {
+            syncSelectionState({ preservePrevious: true });
             if (!currentSelection) return;
             resetSummaryEvaluationState();
             addUserMessage(`请分析句子: "${currentSelection}"`);
@@ -1894,6 +2081,7 @@
 
         // 彩虹拆句
         document.getElementById('color-sentence').addEventListener('click', async function () {
+            syncSelectionState({ preservePrevious: true });
             if (!currentSelection) return;
             resetSummaryEvaluationState();
             addUserMessage(`请彩虹拆句: "${currentSelection}"`);
@@ -1912,6 +2100,7 @@
         });
 
         readAloudBtn.addEventListener('click', async function () {
+            syncSelectionState({ preservePrevious: true });
             try {
                 const speechModule = await loadFeatureModule('speech');
                 if (!speechModule?.handleReadAloudClick) {
@@ -1925,6 +2114,7 @@
 
         // 概括段落
         document.getElementById('summarize-paragraph').addEventListener('click', async function () {
+            syncSelectionState({ preservePrevious: true });
             if (!currentSelection) return;
             const paragraph = (pContent || currentSelection || '').trim();
             if (!paragraph) return;
@@ -1951,6 +2141,7 @@
         });
 
         document.getElementById('translate-paragraph').addEventListener('click', async function () {
+            syncSelectionState({ preservePrevious: true });
             if (!currentSelection) return;
             resetSummaryEvaluationState();
             addUserMessage(`请翻译段落: "${pContent}"`);
