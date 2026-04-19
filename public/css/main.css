@@ -2709,6 +2709,7 @@
         }
 
         html[data-device-tier="tablet"] .reading-stage {
+            flex: 1 1 0;
             padding: 14px;
             gap: 10px;
         }
@@ -2728,13 +2729,18 @@
         }
 
         html[data-device-tier="tablet"] .action-toolbar {
-            padding: 14px;
+            padding: 12px 14px;
+        }
+
+        html[data-device-tier="tablet"] .action-toolbar-head {
+            gap: 6px;
         }
 
         html[data-device-tier="tablet"] .action-buttons {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 8px;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 6px;
+            margin-top: 8px;
             align-items: stretch;
         }
 
@@ -2742,9 +2748,23 @@
         html[data-device-tier="tablet"] .action-buttons #morefuncs {
             width: 100%;
             min-width: 0;
-            min-height: 42px;
-            padding: 8px 10px;
-            white-space: normal;
+            min-height: 36px;
+            padding: 6px 8px;
+            font-size: 11px;
+            line-height: 1.15;
+            white-space: nowrap;
+        }
+
+        html[data-device-tier="tablet"] .action-buttons button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        html[data-device-tier="tablet"] .action-buttons #morefuncs {
+            padding: 6px 20px 6px 8px;
+            background-position: calc(100% - 12px) calc(50% - 2px), calc(100% - 8px) calc(50% - 2px);
+            background-size: 4px 4px, 4px 4px;
         }
 
         html[data-device-tier="tablet"] .chat-header {
