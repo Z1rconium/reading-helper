@@ -96,6 +96,84 @@
                 : '输入任何与英文学习相关的问题...';
         }
 
+        function isScrollableElement(element) {
+            if (!(element instanceof Element)) return false;
+            const style = window.getComputedStyle(element);
+            const overflowY = style.overflowY;
+            if (!/(auto|scroll|overlay)/.test(overflowY)) {
+                return false;
+            }
+            return element.scrollHeight - element.clientHeight > 1;
+        }
+
+        function findScrollableAncestor(node) {
+            let current = node instanceof Element ? node : node?.parentElement || null;
+            while (current && current !== document.body && current !== document.documentElement) {
+                if (isScrollableElement(current)) {
+                    return current;
+                }
+                current = current.parentElement;
+            }
+            return null;
+        }
+
+        function resetTabletPageScrollLockState() {
+            pageScrollLockTouchY = 0;
+            pageScrollLockScrollable = null;
+        }
+
+        function shouldBypassTabletPageScrollLock(target) {
+            return Boolean(target?.closest('.resize-handle'));
+        }
+
+        function handleTabletPageTouchStart(event) {
+            if (!isTabletDevice() || event.touches.length !== 1 || shouldBypassTabletPageScrollLock(event.target)) {
+                resetTabletPageScrollLockState();
+                return;
+            }
+
+            pageScrollLockTouchY = event.touches[0].clientY;
+            pageScrollLockScrollable = findScrollableAncestor(event.target);
+        }
+
+        function handleTabletPageTouchMove(event) {
+            if (!isTabletDevice() || event.touches.length !== 1 || shouldBypassTabletPageScrollLock(event.target)) {
+                return;
+            }
+
+            const currentTouchY = event.touches[0].clientY;
+            const deltaY = currentTouchY - pageScrollLockTouchY;
+            pageScrollLockTouchY = currentTouchY;
+
+            if (Math.abs(deltaY) < PAGE_SCROLL_LOCK_MIN_DELTA_PX) {
+                return;
+            }
+
+            const scrollable = pageScrollLockScrollable && pageScrollLockScrollable.isConnected
+                ? pageScrollLockScrollable
+                : findScrollableAncestor(event.target);
+
+            if (!scrollable) {
+                event.preventDefault();
+                return;
+            }
+
+            const maxScrollTop = scrollable.scrollHeight - scrollable.clientHeight;
+            if (maxScrollTop <= 1) {
+                event.preventDefault();
+                return;
+            }
+
+            const atTop = scrollable.scrollTop <= 0;
+            const atBottom = scrollable.scrollTop >= maxScrollTop - 1;
+            const isPullingDown = deltaY > 0;
+            const isPullingUp = deltaY < 0;
+
+            if ((isPullingDown && atTop) || (isPullingUp && atBottom)) {
+                event.preventDefault();
+            }
+        }
+
         syncDeviceTier();
         applyDeviceSpecificCopy();
 
@@ -302,6 +380,7 @@
             speechPitch: 1.0
         });
         const PREFERENCE_SAVE_DELAY_MS = 500;
+        const PAGE_SCROLL_LOCK_MIN_DELTA_PX = 2;
         const CHAT_HISTORY_LONG_PRESS_DELAY_MS = 520;
         const CHAT_HISTORY_LONG_PRESS_MOVE_TOLERANCE_PX = 14;
         let heartbeatTimerId = 0;
@@ -317,6 +396,8 @@
         let chatHistoryLongPressStartY = 0;
         let suppressChatHistoryClickConversationId = '';
         let suppressChatHistoryClickUntil = 0;
+        let pageScrollLockTouchY = 0;
+        let pageScrollLockScrollable = null;
 
         function clearServerFiles() {
             serverFiles.clear();
@@ -1851,6 +1932,10 @@
         });
         document.addEventListener('pointerup', clearPendingChatHistoryLongPress);
         document.addEventListener('pointercancel', clearPendingChatHistoryLongPress);
+        document.addEventListener('touchstart', handleTabletPageTouchStart, { passive: true });
+        document.addEventListener('touchmove', handleTabletPageTouchMove, { passive: false });
+        document.addEventListener('touchend', resetTabletPageScrollLockState, { passive: true });
+        document.addEventListener('touchcancel', resetTabletPageScrollLockState, { passive: true });
         closeChatHistoryModalBtn.addEventListener('click', () => {
             chatHistoryModal.style.display = 'none';
             clearPendingChatHistoryLongPress();
