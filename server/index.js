@@ -360,19 +360,19 @@ function getProviderDescriptor(providerConfig) {
         ? 'chat-completions'
         : 'custom';
 
-  const isOfficialOpenAI = host === 'api.openai.com' || host.endsWith('.openai.com');
-  const isOfficialAnthropic = host === 'api.anthropic.com' || host.endsWith('.anthropic.com');
-  const tokenTrackingSupported = (
-    (providerKind === 'responses' || providerKind === 'chat-completions') && isOfficialOpenAI
-  ) || (
-    providerKind === 'anthropic' && isOfficialAnthropic
-  );
+  const tokenTrackingSupported = providerKind !== 'custom';
 
   return {
     host,
     providerKind,
     tokenTrackingSupported
   };
+}
+
+function hasTrackedTokens(usageSummary) {
+  return Number(usageSummary?.totalTokens || 0) > 0
+    || Number(usageSummary?.inputTokens || 0) > 0
+    || Number(usageSummary?.outputTokens || 0) > 0;
 }
 
 function buildUpstreamHeaders(providerConfig) {
@@ -446,6 +446,53 @@ function buildUpstreamRequestBody(providerConfig, systemPrompt, userPrompt, prov
       }
     } : {})
   };
+}
+
+function extractUpstreamErrorSummary(errorText) {
+  const rawText = typeof errorText === 'string' ? errorText.trim() : '';
+  if (!rawText) {
+    return '';
+  }
+
+  try {
+    const parsed = JSON.parse(rawText);
+    if (typeof parsed?.error === 'string') {
+      return parsed.error;
+    }
+    if (typeof parsed?.error?.message === 'string') {
+      return parsed.error.message;
+    }
+    if (typeof parsed?.message === 'string') {
+      return parsed.message;
+    }
+  } catch (_) {}
+
+  return rawText;
+}
+
+function shouldRetryWithoutStreamUsage(providerDescriptor, requestBody, status, errorText) {
+  if (
+    providerDescriptor?.providerKind !== 'chat-completions'
+    || requestBody?.stream_options?.include_usage !== true
+    || (status !== 400 && status !== 422)
+  ) {
+    return false;
+  }
+
+  const summary = extractUpstreamErrorSummary(errorText).toLowerCase();
+  if (!summary) {
+    return false;
+  }
+
+  return (
+    summary.includes('stream_options')
+    || summary.includes('include_usage')
+    || summary.includes('unknown parameter')
+    || summary.includes('unknown field')
+    || summary.includes('additional properties')
+    || summary.includes('extra_forbidden')
+    || summary.includes('validation error')
+  );
 }
 
 function getUpstreamError(parsed) {
@@ -772,6 +819,7 @@ async function buildAdminUserSummary(user, sinceIso) {
     getLoginCountSince(user.userId, sinceIso),
     getAiUsageSummary(user.userId)
   ]);
+  const tokenTrackingSupported = providerDescriptor.tokenTrackingSupported || hasTrackedTokens(aiUsageSummary);
 
   return {
     userId: user.userId,
@@ -779,8 +827,8 @@ async function buildAdminUserSummary(user, sinceIso) {
     providerKind: providerDescriptor.providerKind,
     loginCount,
     apiCallCount: aiUsageSummary.apiCallCount,
-    tokenTrackingSupported: providerDescriptor.tokenTrackingSupported,
-    tokenTotals: providerDescriptor.tokenTrackingSupported ? {
+    tokenTrackingSupported,
+    tokenTotals: tokenTrackingSupported ? {
       inputTokens: aiUsageSummary.inputTokens,
       outputTokens: aiUsageSummary.outputTokens,
       totalTokens: aiUsageSummary.totalTokens
@@ -1413,12 +1461,13 @@ async function bootstrap() {
         getAiUsageSummary(targetUser.userId),
         listAiUsageEvents(targetUser.userId)
       ]);
+      const tokenTrackingSupported = providerDescriptor.tokenTrackingSupported || hasTrackedTokens(summary);
 
       return res.json({
         userId: targetUser.userId,
         apiCallCount: summary.apiCallCount,
-        tokenTrackingSupported: providerDescriptor.tokenTrackingSupported,
-        tokenTotals: providerDescriptor.tokenTrackingSupported ? {
+        tokenTrackingSupported,
+        tokenTotals: tokenTrackingSupported ? {
           inputTokens: summary.inputTokens,
           outputTokens: summary.outputTokens,
           totalTokens: summary.totalTokens
@@ -1499,10 +1548,10 @@ async function bootstrap() {
     const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
 
     try {
-      const requestBody = buildUpstreamRequestBody(providerConfig, systemPrompt, prompt, providerDescriptor);
+      let requestBody = buildUpstreamRequestBody(providerConfig, systemPrompt, prompt, providerDescriptor);
 
       dispatchedUpstream = true;
-      const upstreamResponse = await fetch(providerConfig.api_url, {
+      let upstreamResponse = await fetch(providerConfig.api_url, {
         method: 'POST',
         headers: buildUpstreamHeaders(providerConfig),
         body: JSON.stringify(requestBody),
@@ -1511,11 +1560,33 @@ async function bootstrap() {
       });
 
       if (!upstreamResponse.ok || !upstreamResponse.body) {
-        const errorText = await upstreamResponse.text();
-        aiUsageEvent.status = 'upstream_http_error';
-        sendSseChunk(res, { error: errorText || `上游请求失败: ${upstreamResponse.status}` });
-        res.write('data: [DONE]\n\n');
-        return res.end();
+        let errorText = await upstreamResponse.text();
+
+        if (shouldRetryWithoutStreamUsage(providerDescriptor, requestBody, upstreamResponse.status, errorText)) {
+          requestBody = {
+            ...requestBody
+          };
+          delete requestBody.stream_options;
+
+          upstreamResponse = await fetch(providerConfig.api_url, {
+            method: 'POST',
+            headers: buildUpstreamHeaders(providerConfig),
+            body: JSON.stringify(requestBody),
+            signal: controller.signal,
+            agent: providerConfig.api_url.startsWith('https') ? httpsAgent : httpAgent
+          });
+
+          if (!upstreamResponse.ok || !upstreamResponse.body) {
+            errorText = await upstreamResponse.text();
+          }
+        }
+
+        if (!upstreamResponse.ok || !upstreamResponse.body) {
+          aiUsageEvent.status = 'upstream_http_error';
+          sendSseChunk(res, { error: errorText || `上游请求失败: ${upstreamResponse.status}` });
+          res.write('data: [DONE]\n\n');
+          return res.end();
+        }
       }
 
       const reader = upstreamResponse.body.getReader();
@@ -1562,7 +1633,7 @@ async function bootstrap() {
     } finally {
       clearTimeout(timeout);
       if (dispatchedUpstream) {
-        const usage = providerDescriptor.tokenTrackingSupported ? metricsCollector.usage : null;
+        const usage = metricsCollector.usage;
         aiUsageEvent.inputTokens = usage?.inputTokens ?? null;
         aiUsageEvent.outputTokens = usage?.outputTokens ?? null;
         aiUsageEvent.totalTokens = usage?.totalTokens ?? null;
