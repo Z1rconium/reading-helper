@@ -13,7 +13,8 @@ Reading Helper 是一个全栈 Web 应用，面向英语学习场景。用户上
 - 👨‍💼 管理面板（用户在线添加/删除、登录记录、AI 使用统计、聊天历史查看、全量数据刷新）
 - 💬 SQLite 聊天持久化（每篇文章多会话）+ 旧 JSON 自动迁移
 - 🤖 支持 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / 自定义兼容端点
-- ⚡ AI SSE 流式输出与错误透传映射
+- ⚡ AI SSE 流式输出与错误透传映射（改进的 SSE 分块解析，支持 512KB 事件大小）
+- 📊 兼容提供商 Token 用量追踪（自动重试不支持 `stream_options` 的端点）
 - ⚡ `/api/ai/chat/stream` 与 `/api/tts` 默认跳过 `compression`，优化流式首包延迟
 - 🩺 AI 连通性一键检测（`errorCode + message + summary`）
 - 📊 管理员指标追踪（登录事件、AI 使用量、Token 消耗、成本统计）
