@@ -302,12 +302,21 @@
             speechPitch: 1.0
         });
         const PREFERENCE_SAVE_DELAY_MS = 500;
+        const CHAT_HISTORY_LONG_PRESS_DELAY_MS = 520;
+        const CHAT_HISTORY_LONG_PRESS_MOVE_TOLERANCE_PX = 14;
         let heartbeatTimerId = 0;
         let heartbeatInFlight = false;
         let preferenceSaveTimerId = 0;
         let pendingPreferences = null;
         let preferenceSavePromise = null;
         let lastSavedPreferences = { ...DEFAULT_PREFERENCES };
+        let chatHistoryLongPressTimerId = 0;
+        let chatHistoryLongPressPointerId = null;
+        let chatHistoryLongPressItem = null;
+        let chatHistoryLongPressStartX = 0;
+        let chatHistoryLongPressStartY = 0;
+        let suppressChatHistoryClickConversationId = '';
+        let suppressChatHistoryClickUntil = 0;
 
         function clearServerFiles() {
             serverFiles.clear();
@@ -598,6 +607,84 @@
 
             chatHistoryContextMenu.style.left = `${boundedLeft}px`;
             chatHistoryContextMenu.style.top = `${boundedTop}px`;
+        }
+
+        function clearPendingChatHistoryLongPress() {
+            if (chatHistoryLongPressTimerId) {
+                window.clearTimeout(chatHistoryLongPressTimerId);
+                chatHistoryLongPressTimerId = 0;
+            }
+            chatHistoryLongPressPointerId = null;
+            chatHistoryLongPressItem = null;
+            chatHistoryLongPressStartX = 0;
+            chatHistoryLongPressStartY = 0;
+        }
+
+        function suppressNextChatHistoryClick(conversationId) {
+            suppressChatHistoryClickConversationId = conversationId || '';
+            suppressChatHistoryClickUntil = Date.now() + 900;
+        }
+
+        function shouldSuppressChatHistoryClick(conversationId) {
+            if (!conversationId || suppressChatHistoryClickConversationId !== conversationId) {
+                if (Date.now() >= suppressChatHistoryClickUntil) {
+                    suppressChatHistoryClickConversationId = '';
+                    suppressChatHistoryClickUntil = 0;
+                }
+                return false;
+            }
+
+            if (Date.now() <= suppressChatHistoryClickUntil) {
+                suppressChatHistoryClickConversationId = '';
+                suppressChatHistoryClickUntil = 0;
+                return true;
+            }
+
+            suppressChatHistoryClickConversationId = '';
+            suppressChatHistoryClickUntil = 0;
+            return false;
+        }
+
+        function startChatHistoryLongPress(item, event) {
+            clearPendingChatHistoryLongPress();
+            if (!isTabletDevice() || event.pointerType === 'mouse') {
+                return;
+            }
+
+            const conversationId = item?.dataset.conversationId || '';
+            if (!conversationId) {
+                return;
+            }
+
+            chatHistoryLongPressPointerId = event.pointerId;
+            chatHistoryLongPressItem = item;
+            chatHistoryLongPressStartX = event.clientX;
+            chatHistoryLongPressStartY = event.clientY;
+            chatHistoryLongPressTimerId = window.setTimeout(() => {
+                const targetConversationId = chatHistoryLongPressItem?.dataset.conversationId || '';
+                if (!targetConversationId) {
+                    clearPendingChatHistoryLongPress();
+                    return;
+                }
+
+                contextMenuConversationId = targetConversationId;
+                suppressNextChatHistoryClick(targetConversationId);
+                showChatHistoryContextMenu(chatHistoryLongPressStartX, chatHistoryLongPressStartY);
+                clearPendingChatHistoryLongPress();
+            }, CHAT_HISTORY_LONG_PRESS_DELAY_MS);
+        }
+
+        function handleChatHistoryLongPressMove(event) {
+            if (!chatHistoryLongPressTimerId || chatHistoryLongPressPointerId !== event.pointerId) {
+                return;
+            }
+
+            if (
+                Math.abs(event.clientX - chatHistoryLongPressStartX) > CHAT_HISTORY_LONG_PRESS_MOVE_TOLERANCE_PX ||
+                Math.abs(event.clientY - chatHistoryLongPressStartY) > CHAT_HISTORY_LONG_PRESS_MOVE_TOLERANCE_PX
+            ) {
+                clearPendingChatHistoryLongPress();
+            }
         }
 
         function clearTextSelectionState(clearBrowserSelection = false) {
@@ -1722,6 +1809,26 @@
             }
             showChatHistoryContextMenu(event.clientX, event.clientY);
         });
+        chatHistoryList.addEventListener('pointerdown', (event) => {
+            const item = event.target.closest('.chat-history-item');
+            if (!item || !chatHistoryList.contains(item)) {
+                clearPendingChatHistoryLongPress();
+                return;
+            }
+
+            startChatHistoryLongPress(item, event);
+        });
+        chatHistoryList.addEventListener('pointermove', (event) => {
+            handleChatHistoryLongPressMove(event);
+        });
+        chatHistoryList.addEventListener('pointerup', clearPendingChatHistoryLongPress);
+        chatHistoryList.addEventListener('pointercancel', clearPendingChatHistoryLongPress);
+        chatHistoryList.addEventListener('pointerleave', (event) => {
+            if (event.pointerType === 'mouse') {
+                return;
+            }
+            clearPendingChatHistoryLongPress();
+        });
         deleteFileBtn.addEventListener('click', async (event) => {
             event.stopPropagation();
             const targetName = contextMenuFileName;
@@ -1742,23 +1849,31 @@
                 hideChatHistoryContextMenu();
             }
         });
+        document.addEventListener('pointerup', clearPendingChatHistoryLongPress);
+        document.addEventListener('pointercancel', clearPendingChatHistoryLongPress);
         closeChatHistoryModalBtn.addEventListener('click', () => {
             chatHistoryModal.style.display = 'none';
+            clearPendingChatHistoryLongPress();
             hideChatHistoryContextMenu();
         });
         chatHistoryModal.addEventListener('click', (event) => {
             if (event.target === chatHistoryModal) {
                 chatHistoryModal.style.display = 'none';
+                clearPendingChatHistoryLongPress();
                 hideChatHistoryContextMenu();
             }
         });
         fileHistory.addEventListener('scroll', hideFileContextMenu);
-        chatHistoryList.addEventListener('scroll', hideChatHistoryContextMenu);
+        chatHistoryList.addEventListener('scroll', () => {
+            clearPendingChatHistoryLongPress();
+            hideChatHistoryContextMenu();
+        });
         window.addEventListener('resize', () => {
             syncDeviceTier();
             applyDeviceSpecificCopy();
             hideFileContextMenu();
             hideChatHistoryContextMenu();
+            clearPendingChatHistoryLongPress();
             if (isPhoneDevice()) {
                 showPhoneBlockedView();
             } else if (phoneBlockScreen) {
@@ -1871,6 +1986,10 @@
         chatHistoryList.addEventListener('click', async (event) => {
             const item = event.target.closest('.chat-history-item');
             if (!item || !chatHistoryList.contains(item)) return;
+            if (shouldSuppressChatHistoryClick(item.dataset.conversationId || '')) {
+                event.preventDefault();
+                return;
+            }
             hideChatHistoryContextMenu();
             await loadConversationById(item.dataset.conversationId);
         });
