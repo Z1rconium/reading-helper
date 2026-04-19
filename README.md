@@ -2,24 +2,6 @@
 
 > 基于 AI 的多用户英语阅读辅助平台，支持文章精读、词汇高亮、结构化题目、思维导图、流式对话与语音朗读。
 
-## 最近更新
-
-### 2026-04-18
-- **管理员面板完整功能上线**：新增完整的用户管理和监控系统
-  - **用户管理**：支持在线添加/删除用户，自动清理关联数据（会话、偏好、提示词、聊天记录、指标）
-  - **指标追踪**：记录并展示用户登录事件和 AI API 使用情况（请求数、Token 消耗、成本统计）
-  - **聊天历史**：查看所有用户的历史对话记录，支持对话折叠和详细内容展示
-  - **全量刷新**：管理员工具栏新增「刷新全部数据」按钮，可一键强制刷新所有用户的聊天、登录与 AI 用量缓存数据
-  - **后端模块**：
-    - `server/admin-metrics-store.js` - 指标数据持久化（SQLite）
-    - `server/chat-db.js` - 聊天记录数据库访问
-    - `server/users-config-manager.js` - 用户配置文件管理（原子写入）
-  - **UI 优化**：改进管理员面板交互体验，包括按钮悬停效果、滚动条样式和响应式布局
-- **安全加固更新**：
-  - 登录接口 `POST /api/auth/login` 纳入 CSRF 校验链路
-  - CSRF 校验收紧为「Cookie Token + Header Token 必须同时存在且一致」，并拒绝来源不匹配请求
-  - 移除宽松的 `cors({ origin: true, credentials: true })` 默认放行策略，降低跨站请求风险
-
 ## 项目概述
 
 Reading Helper 是一个全栈 Web 应用，面向英语学习场景。用户上传文章后，可围绕选中文本或整篇内容调用提示词能力，并通过流式 AI 对话获得解释、分析、翻译、概括、题目与思维导图等反馈。
@@ -28,13 +10,13 @@ Reading Helper 是一个全栈 Web 应用，面向英语学习场景。用户上
 
 - 🔐 `accessKey` + Cloudflare Turnstile 登录校验
 - 👥 多用户目录与数据隔离（上传、提示词、聊天、偏好）
-- 👨‍💼 管理面板（用户管理、登录记录、AI 使用统计、聊天历史查看）
+- 👨‍💼 管理面板（用户在线添加/删除、登录记录、AI 使用统计、聊天历史查看、全量数据刷新）
 - 💬 SQLite 聊天持久化（每篇文章多会话）+ 旧 JSON 自动迁移
 - 🤖 支持 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / 自定义兼容端点
 - ⚡ AI SSE 流式输出与错误透传映射
 - ⚡ `/api/ai/chat/stream` 与 `/api/tts` 默认跳过 `compression`，优化流式首包延迟
 - 🩺 AI 连通性一键检测（`errorCode + message + summary`）
-- 📊 管理员指标追踪（登录事件、AI 使用量、Token 统计）
+- 📊 管理员指标追踪（登录事件、AI 使用量、Token 消耗、成本统计）
 - 📝 用户级提示词模板管理
 - 📝 `/api/files` 与 `/api/prompts` 列表接口返回文件名数组，前端本地增量维护列表
 - 🎯 CET4/CET6 词汇标注
@@ -45,7 +27,7 @@ Reading Helper 是一个全栈 Web 应用，面向英语学习场景。用户上
 - 📱 平板端优化（页面滚动锁定、长按删除聊天、布局收紧、选择修复）+ 移动端阻断页
 - 🧼 assistant 内容在最终渲染阶段统一清洗，避免后端重复清洗开销
 - 💾 偏好设置前端合并写 + 后端去重落盘，减少重复写入
-- 🔒 CSRF 保护、登录限流、CSP 与会话隔离
+- 🔒 CSRF 保护（Cookie + Header 双重校验）、登录限流、CSP 与会话隔离
 
 ## 技术栈
 
@@ -111,6 +93,7 @@ reading-helper/
 │   ├── chat-migrate.js
 │   ├── preferences-store.js
 │   ├── admin-metrics-store.js
+│   ├── users-config-manager.js
 │   ├── csrf-protection.js
 │   └── ...
 ├── public/
@@ -325,6 +308,18 @@ location / {
 
 获取指定用户的特定会话详细内容。
 
+**`POST /api/admin/users`**
+
+添加新用户（需提供 userId、accessKey 和 provider 配置）。
+
+**`DELETE /api/admin/users/:userId`**
+
+删除用户及其所有关联数据（会话、偏好、提示词、聊天记录、指标）。
+
+**`POST /api/admin/refresh-all`**
+
+强制刷新所有用户的聊天、登录与 AI 用量缓存数据。
+
 ## 手动测试清单
 
 ### 用户功能
@@ -343,11 +338,14 @@ location / {
 
 ### 管理面板功能
 - [ ] 管理员登录（独立于用户登录）
+- [ ] 用户在线添加（userId、accessKey、provider 配置）
+- [ ] 用户删除与关联数据清理（会话、偏好、提示词、聊天记录、指标）
 - [ ] 用户列表展示（userId、最后登录时间、AI 使用量）
 - [ ] 登录记录查看（时间、用户、分页）
-- [ ] AI 使用统计（Token 消耗、请求次数、成功率）
+- [ ] AI 使用统计（Token 消耗、请求次数、成功率、成本统计）
 - [ ] 用户聊天历史查看（文章列表、会话列表）
 - [ ] 会话详情展示（折叠/展开、滚动行为）
+- [ ] 全量数据刷新（一键刷新所有用户的聊天、登录与 AI 用量缓存）
 - [ ] 历史数据加载（跨天统计）
 
 ## 维护提示
