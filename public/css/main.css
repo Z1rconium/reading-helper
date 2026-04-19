@@ -2644,7 +2644,7 @@
         }
 
         html[data-device-tier="tablet"] .file-upload {
-            padding: 14px;
+            padding: 12px;
             gap: 10px;
         }
 
@@ -2655,25 +2655,57 @@
         }
 
         html[data-device-tier="tablet"] .file-controls-row {
-            padding-top: 8px;
+            flex-direction: row;
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 6px;
+            padding-top: 6px;
         }
 
         html[data-device-tier="tablet"] .speech-controls {
-            width: 100%;
-            gap: 6px;
+            width: auto;
+            min-width: 0;
+            flex: 1 1 auto;
+            flex-wrap: nowrap;
+            gap: 4px;
         }
 
         html[data-device-tier="tablet"] .speech-control-group {
-            flex: 1 1 30%;
+            flex: 1 1 0;
             min-width: 0;
-            gap: 6px;
-            padding: 6px 8px;
+            gap: 4px;
+            padding: 4px 6px;
+        }
+
+        html[data-device-tier="tablet"] .speech-control-group label {
+            font-size: 11px;
+        }
+
+        html[data-device-tier="tablet"] .speech-control-input {
+            width: 32px;
+            padding: 2px 0;
+            font-size: 12px;
         }
 
         html[data-device-tier="tablet"] .font-size-controls {
-            width: 100%;
+            width: auto;
             margin-left: 0;
+            flex: 0 0 auto;
             justify-content: flex-end;
+            gap: 4px;
+        }
+
+        html[data-device-tier="tablet"] .font-size-controls button {
+            width: 32px;
+            height: 32px;
+            font-size: 11px;
+            border-radius: 10px;
+        }
+
+        html[data-device-tier="tablet"] .font-size-display {
+            min-width: 36px;
+            font-size: 11px;
+            text-align: center;
         }
 
         html[data-device-tier="tablet"] .reading-stage {
@@ -2726,10 +2758,27 @@
             gap: 6px;
         }
 
+        html[data-device-tier="tablet"] .chat-input {
+            flex-direction: row;
+            align-items: stretch;
+            gap: 8px;
+        }
+
+        html[data-device-tier="tablet"] .chat-input textarea {
+            height: 58px;
+            padding: 12px 14px;
+            font-size: 14px;
+        }
+
         html[data-device-tier="tablet"] .chat-input button,
         html[data-device-tier="tablet"] .rh-view-mindmap {
-            width: 100%;
-            min-height: 46px;
+            width: auto;
+            min-width: 76px;
+            min-height: auto;
+            padding: 0 18px;
+            font-size: 15px;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
         }
 
         html[data-device-tier="tablet"] .auth-modal-content {

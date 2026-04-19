@@ -89,7 +89,15 @@
             return getComputedStyle(resizeHandle).display !== 'none';
         }
 
+        function applyDeviceSpecificCopy() {
+            if (!userInput) return;
+            userInput.placeholder = isTabletDevice()
+                ? '输入问题...'
+                : '输入任何与英文学习相关的问题...';
+        }
+
         syncDeviceTier();
+        applyDeviceSpecificCopy();
 
         const featureModuleLoaders = new Map();
         const featureModules = new Map();
@@ -1748,6 +1756,7 @@
         chatHistoryList.addEventListener('scroll', hideChatHistoryContextMenu);
         window.addEventListener('resize', () => {
             syncDeviceTier();
+            applyDeviceSpecificCopy();
             hideFileContextMenu();
             hideChatHistoryContextMenu();
             if (isPhoneDevice()) {
@@ -1795,6 +1804,7 @@
 
         window.addEventListener('load', async () => {
             syncDeviceTier();
+            applyDeviceSpecificCopy();
             const authenticated = await checkAuthStatus();
             if (authenticated && currentRole === 'user') {
                 await fetchServerFileList();
