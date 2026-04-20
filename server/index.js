@@ -8,6 +8,7 @@ const multer = require('multer');
 const path = require('path');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
+const { Agent: UndiciAgent } = require('undici');
 
 const {
   loadAdminConfig,
@@ -79,6 +80,7 @@ const TRUST_PROXY_ENV = process.env.TRUST_PROXY;
 const AI_REQUEST_TIMEOUT_MS = 120000; // 120 秒超时
 const CONNECTIVITY_TIMEOUT_MS = 10000;
 const TTS_REQUEST_TIMEOUT_MS = 30000;
+const AI_UPSTREAM_CONCURRENCY_LIMIT = 50;
 const MAX_SSE_EVENT_SIZE = 512 * 1024; // 512KB，防止异常上游无限堆积未完成事件
 const MAX_CONNECTIVITY_SUMMARY_LENGTH = 120;
 const EDGE_TTS_ENDPOINT = (() => {
@@ -100,17 +102,100 @@ const EDGE_TTS_ENDPOINT = (() => {
   }
 })();
 
-// #11 AI 请求连接复用 - 创建全局 agent
+const aiUpstreamDispatcher = new UndiciAgent({
+  connections: AI_UPSTREAM_CONCURRENCY_LIMIT,
+  pipelining: 1,
+  keepAliveTimeout: 60000,
+  keepAliveMaxTimeout: 60000
+});
+let aiUpstreamActiveCount = 0;
+const aiUpstreamWaitQueue = [];
+
+// 仅限大模型上游请求；超时/中断时会从等待队列移除，避免“排队到死”。
+function createAbortError() {
+  const error = new Error('This operation was aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function releaseAiUpstreamSlot() {
+  aiUpstreamActiveCount = Math.max(0, aiUpstreamActiveCount - 1);
+
+  while (aiUpstreamActiveCount < AI_UPSTREAM_CONCURRENCY_LIMIT && aiUpstreamWaitQueue.length > 0) {
+    const waiter = aiUpstreamWaitQueue.shift();
+    if (waiter.aborted) {
+      continue;
+    }
+
+    aiUpstreamActiveCount += 1;
+    waiter.resolve();
+    return;
+  }
+}
+
+function acquireAiUpstreamSlot(signal) {
+  if (signal?.aborted) {
+    return Promise.reject(createAbortError());
+  }
+
+  if (aiUpstreamActiveCount < AI_UPSTREAM_CONCURRENCY_LIMIT) {
+    aiUpstreamActiveCount += 1;
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    const waiter = {
+      aborted: false,
+      onAbort: null,
+      resolve: () => {
+        if (waiter.onAbort) {
+          signal?.removeEventListener('abort', waiter.onAbort);
+        }
+        resolve();
+      }
+    };
+
+    waiter.onAbort = () => {
+      waiter.aborted = true;
+      const index = aiUpstreamWaitQueue.indexOf(waiter);
+      if (index !== -1) {
+        aiUpstreamWaitQueue.splice(index, 1);
+      }
+      reject(createAbortError());
+    };
+
+    signal?.addEventListener('abort', waiter.onAbort, { once: true });
+    aiUpstreamWaitQueue.push(waiter);
+  });
+}
+
+async function withAiUpstreamConcurrencySlot(signal, task) {
+  await acquireAiUpstreamSlot(signal);
+  try {
+    return await task();
+  } finally {
+    releaseAiUpstreamSlot();
+  }
+}
+
+function fetchAiUpstream(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    dispatcher: aiUpstreamDispatcher
+  });
+}
+
+// TTS 请求连接复用 - 创建全局 agent
 const httpsAgent = new https.Agent({
   keepAlive: true,
-  maxSockets: 10,
+  maxSockets: 50,
   maxFreeSockets: 5,
   timeout: 60000
 });
 
 const httpAgent = new http.Agent({
   keepAlive: true,
-  maxSockets: 10,
+  maxSockets: 50,
   maxFreeSockets: 5,
   timeout: 60000
 });
@@ -1570,76 +1655,78 @@ async function bootstrap() {
     const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
 
     try {
-      let requestBody = buildUpstreamRequestBody(providerConfig, systemPrompt, prompt, providerDescriptor);
+      await withAiUpstreamConcurrencySlot(controller.signal, async () => {
+        let requestBody = buildUpstreamRequestBody(providerConfig, systemPrompt, prompt, providerDescriptor);
 
-      dispatchedUpstream = true;
-      let upstreamResponse = await fetch(providerConfig.api_url, {
-        method: 'POST',
-        headers: buildUpstreamHeaders(providerConfig),
-        body: JSON.stringify(requestBody),
-        signal: controller.signal,
-        agent: providerConfig.api_url.startsWith('https') ? httpsAgent : httpAgent
-      });
+        dispatchedUpstream = true;
+        let upstreamResponse = await fetchAiUpstream(providerConfig.api_url, {
+          method: 'POST',
+          headers: buildUpstreamHeaders(providerConfig),
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        });
 
-      if (!upstreamResponse.ok || !upstreamResponse.body) {
-        let errorText = await upstreamResponse.text();
+        if (!upstreamResponse.ok || !upstreamResponse.body) {
+          let errorText = await upstreamResponse.text();
 
-        if (shouldRetryWithoutStreamUsage(providerDescriptor, requestBody, upstreamResponse.status, errorText)) {
-          requestBody = {
-            ...requestBody
-          };
-          delete requestBody.stream_options;
+          if (shouldRetryWithoutStreamUsage(providerDescriptor, requestBody, upstreamResponse.status, errorText)) {
+            requestBody = {
+              ...requestBody
+            };
+            delete requestBody.stream_options;
 
-          upstreamResponse = await fetch(providerConfig.api_url, {
-            method: 'POST',
-            headers: buildUpstreamHeaders(providerConfig),
-            body: JSON.stringify(requestBody),
-            signal: controller.signal,
-            agent: providerConfig.api_url.startsWith('https') ? httpsAgent : httpAgent
-          });
+            upstreamResponse = await fetchAiUpstream(providerConfig.api_url, {
+              method: 'POST',
+              headers: buildUpstreamHeaders(providerConfig),
+              body: JSON.stringify(requestBody),
+              signal: controller.signal
+            });
+
+            if (!upstreamResponse.ok || !upstreamResponse.body) {
+              errorText = await upstreamResponse.text();
+            }
+          }
 
           if (!upstreamResponse.ok || !upstreamResponse.body) {
-            errorText = await upstreamResponse.text();
+            aiUsageEvent.status = 'upstream_http_error';
+            sendSseChunk(res, { error: errorText || `上游请求失败: ${upstreamResponse.status}` });
+            res.write('data: [DONE]\n\n');
+            res.end();
+            return;
           }
         }
 
-        if (!upstreamResponse.ok || !upstreamResponse.body) {
-          aiUsageEvent.status = 'upstream_http_error';
-          sendSseChunk(res, { error: errorText || `上游请求失败: ${upstreamResponse.status}` });
-          res.write('data: [DONE]\n\n');
-          return res.end();
+        const reader = upstreamResponse.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          if (buffer.length > MAX_SSE_EVENT_SIZE) {
+            throw new Error('上游 SSE 事件过大或未正确分块');
+          }
+
+          const { events, rest } = splitSseBuffer(buffer);
+          buffer = rest;
+
+          for (const chunk of events) {
+            relayUpstreamChunk(chunk, res, metricsCollector);
+          }
         }
-      }
 
-      const reader = upstreamResponse.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        if (buffer.length > MAX_SSE_EVENT_SIZE) {
-          throw new Error('上游 SSE 事件过大或未正确分块');
+        if (buffer.trim() !== '') {
+          relayUpstreamChunk(buffer, res, metricsCollector);
         }
 
-        const { events, rest } = splitSseBuffer(buffer);
-        buffer = rest;
-
-        for (const chunk of events) {
-          relayUpstreamChunk(chunk, res, metricsCollector);
-        }
-      }
-
-      if (buffer.trim() !== '') {
-        relayUpstreamChunk(buffer, res, metricsCollector);
-      }
-
-      aiUsageEvent.status = metricsCollector.status || 'completed';
-      res.write('data: [DONE]\n\n');
-      return res.end();
+        aiUsageEvent.status = metricsCollector.status || 'completed';
+        res.write('data: [DONE]\n\n');
+        res.end();
+      });
+      return;
     } catch (error) {
       if (error.name === 'AbortError') {
         aiUsageEvent.status = 'timeout';
@@ -1706,16 +1793,17 @@ async function bootstrap() {
     const startTime = Date.now();
 
     try {
-      const headers = buildUpstreamHeaders(providerConfig);
-      // 探测请求不需要 SSE
-      headers.Accept = 'application/json';
+      const upstreamResponse = await withAiUpstreamConcurrencySlot(controller.signal, async () => {
+        const headers = buildUpstreamHeaders(providerConfig);
+        // 探测请求不需要 SSE
+        headers.Accept = 'application/json';
 
-      const upstreamResponse = await fetch(providerConfig.api_url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(probeBody),
-        signal: controller.signal,
-        agent: providerConfig.api_url.startsWith('https') ? httpsAgent : httpAgent
+        return fetchAiUpstream(providerConfig.api_url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(probeBody),
+          signal: controller.signal
+        });
       });
 
       const latencyMs = Date.now() - startTime;
