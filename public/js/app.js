@@ -2839,7 +2839,21 @@
                     throw new Error('请先登录后再使用AI功能');
                 }
                 if (!response.ok) {
-                    throw new Error(`API请求失败: ${response.status}`);
+                    let errorMessage = `API请求失败: ${response.status}`;
+                    const responseType = String(response.headers.get('content-type') || '').toLowerCase();
+
+                    if (responseType.includes('application/json')) {
+                        try {
+                            const errorPayload = await response.json();
+                            if (typeof errorPayload?.error === 'string' && errorPayload.error.trim()) {
+                                errorMessage = errorPayload.error.trim();
+                            }
+                        } catch (_) {
+                            // ignore invalid error payloads
+                        }
+                    }
+
+                    throw new Error(errorMessage);
                 }
 
                 const reader = response.body.getReader();

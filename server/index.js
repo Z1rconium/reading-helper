@@ -81,6 +81,10 @@ const AI_REQUEST_TIMEOUT_MS = 120000; // 120 秒超时
 const CONNECTIVITY_TIMEOUT_MS = 10000;
 const TTS_REQUEST_TIMEOUT_MS = 30000;
 const AI_UPSTREAM_CONCURRENCY_LIMIT = 50;
+const AI_USER_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const AI_USER_RATE_LIMIT_MAX_REQUESTS = 10;
+const AI_USER_RATE_LIMIT_KEY_PREFIX = 'reading-helper:rate-limit:ai:';
+const AI_USER_RATE_LIMIT_KEY_TTL_MS = AI_USER_RATE_LIMIT_WINDOW_MS + 5000;
 const MAX_SSE_EVENT_SIZE = 512 * 1024; // 512KB，防止异常上游无限堆积未完成事件
 const MAX_CONNECTIVITY_SUMMARY_LENGTH = 120;
 const EDGE_TTS_ENDPOINT = (() => {
@@ -254,6 +258,71 @@ function getSessionUserId(req) {
 
 function getSessionRole(req) {
   return req.session?.role === 'admin' ? 'admin' : req.session?.role === 'user' ? 'user' : '';
+}
+
+function buildAiRateLimitExceededMessage(retryAfterSeconds) {
+  return `AI 请求过于频繁，每位用户每分钟最多 ${AI_USER_RATE_LIMIT_MAX_REQUESTS} 次，请在 ${retryAfterSeconds} 秒后重试`;
+}
+
+function applyAiRateLimitHeaders(res, limitState) {
+  res.setHeader('X-RateLimit-Limit', String(limitState.limit));
+  res.setHeader('X-RateLimit-Remaining', String(limitState.remaining));
+  res.setHeader('X-RateLimit-Reset', String(Math.floor(limitState.resetAtMs / 1000)));
+  if (!limitState.allowed) {
+    res.setHeader('Retry-After', String(limitState.retryAfterSeconds));
+  }
+}
+
+async function consumeAiRequestRateLimit(redisClient, userId) {
+  const now = Date.now();
+  const windowId = Math.floor(now / AI_USER_RATE_LIMIT_WINDOW_MS);
+  const key = `${AI_USER_RATE_LIMIT_KEY_PREFIX}${userId}:${windowId}`;
+  const count = await redisClient.incr(key);
+
+  if (count === 1) {
+    await redisClient.pExpire(key, AI_USER_RATE_LIMIT_KEY_TTL_MS);
+  }
+
+  const remainingWindowMs = AI_USER_RATE_LIMIT_WINDOW_MS - (now % AI_USER_RATE_LIMIT_WINDOW_MS);
+
+  return {
+    allowed: count <= AI_USER_RATE_LIMIT_MAX_REQUESTS,
+    limit: AI_USER_RATE_LIMIT_MAX_REQUESTS,
+    remaining: Math.max(0, AI_USER_RATE_LIMIT_MAX_REQUESTS - count),
+    retryAfterSeconds: Math.max(1, Math.ceil(remainingWindowMs / 1000)),
+    resetAtMs: now + remainingWindowMs
+  };
+}
+
+function createAiRequestRateLimiter(redisClient) {
+  return function aiRequestRateLimiter(req, res, next) {
+    void (async () => {
+      const userId = req.currentUser?.userId || getSessionUserId(req);
+      if (!userId) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const limitState = await consumeAiRequestRateLimit(redisClient, userId);
+      applyAiRateLimitHeaders(res, limitState);
+
+      if (!limitState.allowed) {
+        res.status(429).json({
+          error: buildAiRateLimitExceededMessage(limitState.retryAfterSeconds),
+          limit: limitState.limit,
+          windowSeconds: AI_USER_RATE_LIMIT_WINDOW_MS / 1000,
+          retryAfterSeconds: limitState.retryAfterSeconds
+        });
+        return;
+      }
+
+      req.aiRateLimit = limitState;
+      next();
+    })().catch((error) => {
+      console.error('[RateLimit] Failed to enforce AI request rate limit:', error.message);
+      res.status(503).json({ error: 'AI 限流服务暂时不可用' });
+    });
+  };
 }
 
 function isAuthenticatedSession(req) {
@@ -971,7 +1040,9 @@ async function bootstrap() {
   });
   const initialUserSnapshot = await userConfigManager.getSnapshot();
   const sessionStore = await createSessionStore();
+  const aiRateLimitRedisClient = sessionStore.redisClient;
   const requireUserAuth = createRequireUserAuth(userConfigManager);
+  const aiRequestRateLimiter = createAiRequestRateLimiter(aiRateLimitRedisClient);
   const trustProxy = parseTrustProxy(TRUST_PROXY_ENV);
   const resolvedTrustProxy = trustProxy === null ? 1 : trustProxy;
 
@@ -1620,7 +1691,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/ai/chat/stream', requireUserAuth, csrfProtection, async (req, res) => {
+  app.post('/api/ai/chat/stream', requireUserAuth, csrfProtection, aiRequestRateLimiter, async (req, res) => {
     const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
     const systemPrompt = typeof req.body?.systemPrompt === 'string' ? req.body.systemPrompt : '';
     if (!prompt) {
@@ -1754,7 +1825,7 @@ async function bootstrap() {
     }
   });
 
-  app.post('/api/ai/connectivity-check', requireUserAuth, csrfProtection, async (req, res) => {
+  app.post('/api/ai/connectivity-check', requireUserAuth, csrfProtection, aiRequestRateLimiter, async (req, res) => {
     const user = req.currentUser;
     const providerConfig = user.provider;
 
@@ -1935,7 +2006,18 @@ async function bootstrap() {
     console.log(`[Server] Received ${signal}, closing HTTP server...`);
     closeAllChatDatabases();
     closeAdminMetricsDatabase();
-    server.close(() => process.exit(0));
+    server.close(() => {
+      void (async () => {
+        if (typeof aiRateLimitRedisClient?.quit === 'function') {
+          try {
+            await aiRateLimitRedisClient.quit();
+          } catch (error) {
+            console.error('[RateLimit] Failed to close Redis client:', error.message);
+          }
+        }
+        process.exit(0);
+      })();
+    });
     setTimeout(() => process.exit(1), 5000).unref();
   };
 

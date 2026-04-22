@@ -30,11 +30,14 @@ async function createSessionStore() {
 
   await redisClient.connect();
 
-  return new RedisStore({
+  const store = new RedisStore({
     client: redisClient,
     prefix: process.env.REDIS_SESSION_PREFIX || 'reading-helper:sess:',
     disableTouch: true
   });
+
+  store.redisClient = redisClient;
+  return store;
 }
 
 async function destroyUserSessions(sessionStore, userId) {
