@@ -371,6 +371,7 @@
             sendButton: 'send-button.md'
         };
         const DEFAULT_CHAT_SYSTEM_PROMPT = '你是一位专业的英语老师。请回答学生关于英语学习的问题，要求：回答专业准确、重点清晰，并在需要时给出简短例子。';
+        const DIRECT_PARAGRAPH_SUMMARY_SYSTEM_PROMPT = '你是一位专业的英语阅读老师。请对用户提供的英文段落做精准概括，要求：1. 准确覆盖段落主旨，不歪曲原意；2. 点出关键细节，但不要堆砌次要信息；3. 用中文输出；4. 语言简洁自然；5. 只输出概括内容本身，不要加标题、解释、客套话或分析过程。';
         const MAX_ARTICLE_CONTEXT_CHARS = 12000;
         const HEARTBEAT_FOREGROUND_MS = 4 * 60 * 1000;
         const HEARTBEAT_BACKGROUND_MS = 10 * 60 * 1000;
@@ -2333,25 +2334,47 @@
             const paragraph = (pContent || currentSelection || '').trim();
             if (!paragraph) return;
 
-            summaryEvaluationArmed = true;
-            summaryOriginalParagraph = paragraph;
+            const useStudentAnswerMode = window.confirm(
+                '是否进入学生作答模式？\n\n点击“确定”：学生先手动输入英文概括，AI 再按原文评价。\n点击“取消”：AI 直接给出这段的精准概括。'
+            );
 
-            addUserMessage(`请概括段落: "${paragraph}"`);
-            let guideMessage = '请先用英文概括这段内容的主要意思。你发送概括后，我会评价是否准确并给出参考句。';
-            try {
-                const template = await fetchPromptFileContent(PROMPT_FILES.summarizeParagraph, true);
-                const rendered = fillPromptTemplate(template, {
-                    currentSelection,
-                    pContent: paragraph,
-                    currentFileName,
-                    currentFileContent
-                }).trim();
-                if (rendered) {
-                    guideMessage = rendered;
+            if (useStudentAnswerMode) {
+                summaryEvaluationArmed = true;
+                summaryOriginalParagraph = paragraph;
+
+                addUserMessage(`请概括段落: "${paragraph}"`);
+                let guideMessage = '请先用英文概括这段内容的主要意思。你发送概括后，我会评价是否准确并给出参考句。';
+                try {
+                    const template = await fetchPromptFileContent(PROMPT_FILES.summarizeParagraph, true);
+                    const rendered = fillPromptTemplate(template, {
+                        currentSelection,
+                        pContent: paragraph,
+                        currentFileName,
+                        currentFileContent
+                    }).trim();
+                    if (rendered) {
+                        guideMessage = rendered;
+                    }
+                } catch (error) {
                 }
-            } catch (error) {
+                simulateAIResponse(guideMessage);
+                return;
             }
-            simulateAIResponse(guideMessage);
+
+            resetSummaryEvaluationState();
+            addUserMessage(`请直接精准概括段落: "${paragraph}"`);
+
+            try {
+                const loadingMessage = simulateAIResponse('正在概括段落...');
+                await callAIApi(
+                    DIRECT_PARAGRAPH_SUMMARY_SYSTEM_PROMPT,
+                    `请精准概括下面这段英文内容：\n\n${paragraph}`,
+                    loadingMessage,
+                    null
+                );
+            } catch (error) {
+                addSystemMessage(`调用概括段落失败: ${error.message}`);
+            }
         });
 
         document.getElementById('translate-paragraph').addEventListener('click', async function () {
