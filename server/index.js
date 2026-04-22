@@ -273,15 +273,29 @@ function applyAiRateLimitHeaders(res, limitState) {
   }
 }
 
+const rateLimitLuaScript = `
+  local key = KEYS[1]
+  local ttl = tonumber(ARGV[1])
+
+  local count = redis.call('INCR', key)
+  if count == 1 then
+    redis.call('PEXPIRE', key, ttl)
+  end
+
+  return count
+`;
+
 async function consumeAiRequestRateLimit(redisClient, userId) {
   const now = Date.now();
   const windowId = Math.floor(now / AI_USER_RATE_LIMIT_WINDOW_MS);
   const key = `${AI_USER_RATE_LIMIT_KEY_PREFIX}${userId}:${windowId}`;
-  const count = await redisClient.incr(key);
 
-  if (count === 1) {
-    await redisClient.pExpire(key, AI_USER_RATE_LIMIT_KEY_TTL_MS);
-  }
+  const count = await redisClient.eval(
+    rateLimitLuaScript,
+    1,
+    key,
+    AI_USER_RATE_LIMIT_KEY_TTL_MS
+  );
 
   const remainingWindowMs = AI_USER_RATE_LIMIT_WINDOW_MS - (now % AI_USER_RATE_LIMIT_WINDOW_MS);
 
@@ -319,8 +333,16 @@ function createAiRequestRateLimiter(redisClient) {
       req.aiRateLimit = limitState;
       next();
     })().catch((error) => {
-      console.error('[RateLimit] Failed to enforce AI request rate limit:', error.message);
-      res.status(503).json({ error: 'AI 限流服务暂时不可用' });
+      console.error('[RateLimit] Redis error, bypassing rate limit:', error.message);
+      console.warn('[RateLimit] ALERT: Rate limiting is currently disabled due to Redis failure');
+
+      req.aiRateLimit = {
+        allowed: true,
+        limit: AI_USER_RATE_LIMIT_MAX_REQUESTS,
+        remaining: 0,
+        bypassed: true
+      };
+      next();
     });
   };
 }

@@ -12,3 +12,6 @@ config/users.config copy.json
 .vendor
 .claude
 .vendor/cap-widget-fork
+RATE_LIMIT_VERIFICATION.md
+.gitignore
+test-rate-limit.js
