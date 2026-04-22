@@ -1,159 +1,127 @@
-# 📚 Reading Helper
+# Reading Helper
 
-> 基于 AI 的多用户英语阅读辅助平台，支持文章精读、词汇高亮、结构化题目、思维导图、流式对话与语音朗读。
+面向英语阅读教学和自学场景的多用户 AI 阅读辅助平台，支持文章上传、选词精讲、整段分析、结构化出题、思维导图、流式对话和朗读。
 
-## 项目概述
+![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-43853D?style=flat-square&logo=node.js&logoColor=white)
+![Express](https://img.shields.io/badge/Express-4.21-000000?style=flat-square&logo=express&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-Session-DC382D?style=flat-square&logo=redis&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-better--sqlite3-003B57?style=flat-square&logo=sqlite&logoColor=white)
+![JavaScript](https://img.shields.io/badge/Frontend-Vanilla_JS-F7DF1E?style=flat-square&logo=javascript&logoColor=111111)
+![SSE](https://img.shields.io/badge/Streaming-SSE-0A66C2?style=flat-square)
+![D3](https://img.shields.io/badge/D3-Mindmap-F68E56?style=flat-square&logo=d3.js&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
 
-Reading Helper 是一个全栈 Web 应用，面向英语学习场景。用户上传文章后，可围绕选中文本或整篇内容调用提示词能力，并通过流式 AI 对话获得解释、分析、翻译、概括、题目与思维导图等反馈。
+## 项目定位
 
-## 核心特性
+Reading Helper 不是一个通用聊天壳，而是围绕“英文文章阅读”这个核心任务搭的一套完整工作流：
 
-- 🔐 `accessKey` + Cloudflare Turnstile 登录校验
-- 👥 多用户目录与数据隔离（上传、提示词、聊天、偏好）
-- 👨‍💼 管理面板（用户在线添加/删除、登录记录、AI 使用统计、聊天历史查看、全量数据刷新）
-- 💬 SQLite 聊天持久化（每篇文章多会话）+ 旧 JSON 自动迁移
-- 🤖 支持 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / 自定义兼容端点
-- ⚡ AI SSE 流式输出与错误透传映射（改进的 SSE 分块解析，支持 512KB 事件大小）
-- 📊 兼容提供商 Token 用量追踪（自动重试不支持 `stream_options` 的端点）
-- ⚡ `/api/ai/chat/stream` 与 `/api/tts` 默认跳过 `compression`，优化流式首包延迟
-- 🩺 AI 连通性一键检测（`errorCode + message + summary`）
-- 📊 管理员指标追踪（登录事件、AI 使用量、Token 消耗、成本统计）
-- 📝 用户级提示词模板管理
-- 📝 `/api/files` 与 `/api/prompts` 列表接口返回文件名数组，前端本地增量维护列表
-- 🎯 CET4/CET6 词汇标注
-- 🔊 Edge TTS + 浏览器本地语音回退（非 Safari 下 Edge 不可用时自动回退）
-- 🧠 思维导图可视化（D3 + markmap，含渲染缓存与缩放/折叠状态优化）
-- 🧩 开放题、选择题、判断题、语法树等结构化输出渲染
-- 🚀 前端按需模块化加载（`article-renderer`、`speech`、`mindmap`、`quiz`、`prompt-manager`、`admin-panel`）与交互预热
-- 📱 平板端优化（页面滚动锁定、长按删除聊天、布局收紧、选择修复）+ 移动端阻断页
-- 🧼 assistant 内容在最终渲染阶段统一清洗，避免后端重复清洗开销
-- 💾 偏好设置前端合并写 + 后端去重落盘，减少重复写入
-- 🔒 CSRF 保护（Cookie + Header 双重校验）、登录限流、CSP 与会话隔离
+- 用户上传 `.txt` / `.text` / `.md` 文章后，在阅读区直接选词、选句、选段。
+- 前端把当前选择和文章上下文送到对应提示词模板，后端再代理到配置好的 AI 提供商。
+- 输出支持流式返回，并按任务类型渲染成解释、翻译、概括、题目、思维导图等结构化结果。
+- 每个用户的数据、提示词、聊天记录、偏好设置、用量统计都做了隔离。
+
+## 核心能力
+
+- 多用户登录：`accessKey` 登录，支持 Cloudflare Turnstile 校验。
+- 阅读交互：单词解释、句法分析、彩虹拆句、段落翻译、段落概括。
+- 全文任务：词汇标注、问答题、选择题、判断题、思维导图。
+- 流式 AI：SSE 输出、上游并发控制、超时处理、错误映射。
+- 朗读能力：`/api/tts` 接 Edge TTS，失败时前端可回退 Web Speech API。
+- 会话持久化：按文章维护多会话聊天，SQLite 持久化，兼容旧 JSON 迁移。
+- 提示词管理：用户级 prompt 模板读写和同步。
+- 管理后台：用户增删、登录记录、AI 使用统计、聊天记录查看、数据清理。
+- 安全控制：CSRF、登录限流、CSP、会话隔离、文件名校验。
 
 ## 技术栈
 
 ### 后端
-- Node.js >= 18
-- Express
-- Redis + `connect-redis`（会话）
-- SQLite + `better-sqlite3`（聊天 + 管理员指标）
-- Multer（上传）
-- compression（HTTP 压缩）
+
+- `Node.js >= 18`
+- `Express 4`
+- `express-session` + `connect-redis` + `redis`
+- `better-sqlite3`
+- `undici`
+- `multer`
+- `compression`
+- `express-rate-limit`
+- `cookie-parser`
 
 ### 前端
-- 原生 JavaScript（主壳 + 懒加载模块）
-- DOMPurify（渲染侧安全清洗）
-- D3.js + markmap（思维导图）
-- Web Speech API + Edge TTS
 
-## 数据流架构
+- 原生 `JavaScript`
+- 模块化前端拆分：`core / utils / modules`
+- `D3.js` + `markmap` 思维导图渲染
+- `DOMPurify` / `sanitize-html` 内容清洗
+- `Web Speech API`
+- `@cap.js/widget`（Turnstile 相关前端组件）
 
-```text
-┌─────────────┐
-│   用户登录   │ ──> accessKey 验证 + Cloudflare Turnstile
-└──────┬──────┘
-       │
-       ▼
-┌──────────────────────────────────────────────────────┐
-│                Express 中间件层                      │
-│ Session(Redis) │ CSRF │ Rate Limit │ Compression    │
-└───────────────────┬──────────────────────────────────┘
-                    │
-       ┌────────────┼──────────────┬──────────────┐
-       ▼            ▼              ▼              ▼
-┌──────────┐ ┌──────────┐ ┌──────────────┐ ┌──────────┐
-│ 文件管理  │ │ 提示词库  │ │ 对话存储      │ │ 偏好设置  │
-│ uploads  │ │ .md      │ │ SQLite / WAL │ │ .json    │
-└──────────┘ └──────────┘ └──────────────┘ └──────────┘
-       │            │              │
-       └────────────┼──────────────┘
-                    ▼
-         ┌───────────────────────────┐
-         │      AI 提供商抽象层       │
-         │ OpenAI / Anthropic / 兼容端点 │
-         └─────────────┬─────────────┘
-                       │
-                       ▼
-                SSE 流式输出到前端
+### 数据与运行时
 
-前端朗读链路：
-用户操作 → /api/tts → Edge TTS（失败时回退 Web Speech API 本地语音）
-```
+- `Redis`：Session Store
+- `SQLite`：聊天数据、管理员指标
+- 文件系统：用户上传、提示词模板、偏好设置
+- `PM2`：生产集群部署
 
-## 项目结构
+## 系统架构
 
 ```text
-reading-helper/
-├── server/
-│   ├── index.js
-│   ├── session-store.js
-│   ├── file-store.js
-│   ├── prompt-store.js
-│   ├── chat-store.js
-│   ├── chat-db.js
-│   ├── chat-migrate.js
-│   ├── preferences-store.js
-│   ├── admin-metrics-store.js
-│   ├── users-config-manager.js
-│   ├── csrf-protection.js
-│   └── ...
-├── public/
-│   ├── index.html
-│   ├── css/main.css
-│   └── js/
-│       ├── app.js
-│       ├── main.js
-│       ├── core/
-│       ├── utils/
-│       └── modules/
-│           ├── article-renderer.js
-│           ├── speech.js
-│           ├── mindmap.js
-│           ├── quiz.js
-│           ├── prompt-manager.js
-│           └── admin-panel.js
-├── config/
-│   ├── platform.config.json
-│   ├── users.config.json
-│   ├── admin.config.json
-│   ├── cet_word_list.txt
-│   └── prompts/*.md
-├── data/
-│   ├── admin/admin.sqlite
-│   └── users/<userId>/
-│       ├── uploads/
-│       ├── chats/chat.sqlite
-│       ├── prompts/
-│       └── preferences.json
-├── ecosystem.config.js
-└── package.json
+Browser
+  │
+  ├─ 阅读区 / 快捷操作 / AI 问答区 / 管理后台
+  │
+  ▼
+Express App
+  ├─ Session + Redis
+  ├─ CSRF / Rate Limit / CSP / Compression
+  ├─ File Store
+  ├─ Prompt Store
+  ├─ Chat Store + SQLite
+  ├─ Preferences Store
+  ├─ Admin Metrics + SQLite
+  └─ AI Proxy / TTS Proxy
+        ├─ OpenAI Chat Completions
+        ├─ OpenAI Responses
+        ├─ Anthropic Messages
+        ├─ Custom Compatible Endpoint
+        └─ Edge TTS Endpoint
 ```
 
 ## 快速开始
 
-### 1) 安装依赖
+### 1. 安装依赖
 
 ```bash
 npm install
 ```
 
-### 2) 配置环境变量
+### 2. 准备运行依赖
 
-```bash
-export REDIS_URL="redis://127.0.0.1:6379"
-export TURNSTILE_SECRET_KEY="your-cloudflare-turnstile-secret"
+你至少需要这三样：
+
+- `Node.js >= 18`
+- 一个可用的 `Redis`
+- 一个可访问的 `EDGE_TTS_ENDPOINT`
+
+注意：当前服务启动时会强校验 `REDIS_URL` 和 `EDGE_TTS_ENDPOINT`。少任何一个，服务都会直接报错退出。
+
+### 3. 准备配置文件
+
+#### `config/platform.config.json`
+
+```json
+{
+  "session_secret": "replace-with-a-long-random-secret"
+}
 ```
 
-### 3) 配置用户
-
-编辑 `config/users.config.json`：
+#### `config/users.config.json`
 
 ```json
 {
   "users": [
     {
       "userId": "demo",
-      "accessKey": "your-secret-key",
+      "accessKey": "replace-with-user-access-key",
       "provider": {
         "api_url": "https://api.openai.com/v1/chat/completions",
         "api_key": "sk-...",
@@ -164,17 +132,24 @@ export TURNSTILE_SECRET_KEY="your-cloudflare-turnstile-secret"
 }
 ```
 
-### 4) 配置管理员（可选）
-
-编辑 `config/admin.config.json`：
+#### `config/admin.config.json`
 
 ```json
 {
-  "accessKey": "your-admin-secret-key"
+  "accessKey": "replace-with-admin-access-key"
 }
 ```
 
-### 5) 启动
+### 4. 配置环境变量
+
+```bash
+export REDIS_URL="redis://127.0.0.1:6379"
+export EDGE_TTS_ENDPOINT="http://127.0.0.1:3311"
+export CONFIG_DIR="./config"
+export USER_DATA_ROOT="./data/users"
+```
+
+### 5. 启动服务
 
 开发模式：
 
@@ -188,34 +163,137 @@ npm run dev
 npm start
 ```
 
-自定义路径示例：
+完整示例：
 
 ```bash
 REDIS_URL="redis://127.0.0.1:6379" \
+EDGE_TTS_ENDPOINT="http://127.0.0.1:3311" \
 CONFIG_DIR=./config \
 USER_DATA_ROOT=./data/users \
 npm start
 ```
 
-访问：`http://localhost:3000`
+默认访问地址：
 
-## 关键环境变量
+```text
+http://localhost:3000
+```
 
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `PORT` | `3000` | 服务端口 |
-| `REDIS_URL` | - | 必填，Redis 会话连接 |
-| `CONFIG_DIR` | `./config` | 配置目录 |
-| `USER_DATA_ROOT` | `./data/users` | 用户数据根目录 |
-| `MAX_UPLOAD_BYTES` | `2097152` | 最大上传大小（字节） |
-| `TRUST_PROXY` | `1` | 反向代理信任级别 |
-| `TURNSTILE_SECRET_KEY` | - | Turnstile Secret |
-| `CF_TURNSTILE_SECRET_KEY` | - | Turnstile Secret 备用变量名 |
-| `ADMIN_DATA_DIR` | `./data/admin` | 管理员数据目录 |
+## 配置说明
 
-## 部署说明
+### 关键环境变量
 
-### PM2
+| 变量 | 必填 | 默认值 | 说明 |
+|---|---|---:|---|
+| `PORT` | 否 | `3000` | 服务端口 |
+| `REDIS_URL` | 是 | - | Redis Session Store 连接串 |
+| `EDGE_TTS_ENDPOINT` | 是 | - | Edge TTS 代理服务地址 |
+| `CONFIG_DIR` | 否 | `./config` | 配置目录 |
+| `USER_DATA_ROOT` | 否 | `./data/users` | 用户数据根目录 |
+| `ADMIN_DATA_DIR` | 否 | `./data/admin` | 管理员 SQLite 数据目录 |
+| `MAX_UPLOAD_BYTES` | 否 | `2097152` | 上传文件大小上限 |
+| `TRUST_PROXY` | 否 | 未设置 | 反向代理信任级别 |
+| `TURNSTILE_SECRET_KEY` | 否 | - | Cloudflare Turnstile secret |
+| `CF_TURNSTILE_SECRET_KEY` | 否 | - | Turnstile 备用环境变量名 |
+| `REDIS_SESSION_PREFIX` | 否 | `reading-helper:sess:` | Redis Session key 前缀 |
+
+### 上传限制
+
+- 仅支持 `.txt`、`.text`、`.md`
+- 默认最大上传大小 `2MB`
+- 文件名会做合法性校验，禁止路径穿越和控制字符
+
+### 设备策略
+
+- `desktop` / `tablet` 正常可用
+- `phone` 端默认阻断登录入口，避免交互体验失控
+
+## 项目结构
+
+```text
+reading-helper/
+├── server/
+│   ├── index.js
+│   ├── config-loader.js
+│   ├── session-store.js
+│   ├── file-store.js
+│   ├── prompt-store.js
+│   ├── chat-store.js
+│   ├── chat-db.js
+│   ├── chat-migrate.js
+│   ├── preferences-store.js
+│   ├── admin-metrics-store.js
+│   ├── users-config-manager.js
+│   ├── csrf-protection.js
+│   ├── cleanup-orphaned-users.js
+│   └── user-paths.js
+├── public/
+│   ├── index.html
+│   ├── css/main.css
+│   └── js/
+│       ├── main.js
+│       ├── app.js
+│       ├── core/
+│       ├── utils/
+│       └── modules/
+├── config/
+│   ├── platform.config.json
+│   ├── admin.config.json
+│   ├── cet_word_list.txt
+│   └── prompts/*.md
+├── data/
+├── scripts/
+├── ecosystem.config.js
+├── PM2_DEPLOYMENT.md
+└── package.json
+```
+
+## 主要数据落盘位置
+
+```text
+data/
+├── admin/
+│   └── admin.sqlite
+└── users/<userId>/
+    ├── uploads/
+    ├── chats/
+    │   └── chat.sqlite
+    ├── prompts/
+    └── preferences.json
+```
+
+## 开发说明
+
+### 可用脚本
+
+```bash
+npm install
+npm run dev
+npm start
+pm2 start ecosystem.config.js
+```
+
+### 代码风格
+
+- 后端使用 CommonJS
+- 统一 2 空格缩进
+- 模块命名沿用仓库现有风格：`xxx-store.js`、`xxx-loader.js`
+- 前端资源有版本号缓存策略；如果你改了前端静态资源，记得同步更新：
+  - `public/index.html` 里的 `?v=...`
+  - `public/js/main.js` 里的 `MODULE_VERSION`
+
+### 测试现状
+
+仓库当前没有自动化测试，也没有单独测试目录。现阶段更适合做：
+
+- 核心 API 手动回归
+- 登录 / 会话 / CSRF 校验
+- 文件上传与提示词读写
+- SSE 流式输出和 TTS 回退链路验证
+
+## 部署
+
+项目内置 PM2 配置，可直接启动：
 
 ```bash
 pm2 start ecosystem.config.js
@@ -223,7 +301,7 @@ pm2 logs reading-helper
 pm2 reload reading-helper
 ```
 
-### Nginx（SSE 关键项）
+如果你前面放了 Nginx，SSE 相关配置至少要保证：
 
 ```nginx
 location / {
@@ -239,123 +317,16 @@ location / {
 }
 ```
 
-静态资源缓存策略：
-- `public/index.html` 使用 `?v=...` 版本参数引用脚本
-- 生产环境对带 `v` 参数的 `.js/.css` 返回 `Cache-Control: immutable`
+更细的 PM2 部署说明见：[PM2_DEPLOYMENT.md](/Users/wangchengan/Documents/Coding/reading-helper/PM2_DEPLOYMENT.md)
 
-## API 文档
+## 安全与运维提示
 
-### 连通性检查
+- 不要提交真实的 `config/*.json` 密钥。
+- 生产环境建议把 `CONFIG_DIR` 和 `USER_DATA_ROOT` 指到仓库外目录。
+- 如果走 HTTPS，建议把 Session Cookie 的 `secure` 打开。
+- `userId` 只允许字母、数字、下划线和中划线。
+- 管理员 `accessKey` 不能和普通用户重复。
 
-**`POST /api/ai/connectivity-check`**
+## License
 
-检查当前登录用户配置的上游 AI 端点可达性。
-
-成功示例：
-
-```json
-{
-  "ok": true,
-  "latencyMs": 328,
-  "status": 200
-}
-```
-
-失败示例：
-
-```json
-{
-  "ok": false,
-  "latencyMs": 412,
-  "status": 401,
-  "errorCode": "AUTH_FAILED",
-  "message": "API Key 无效或无权限",
-  "summary": "Incorrect API key provided"
-}
-```
-
-常见 `errorCode`：
-- `AUTH_FAILED`
-- `ENDPOINT_NOT_FOUND`
-- `RATE_LIMITED`
-- `UPSTREAM_UNAVAILABLE`
-- `TIMEOUT`
-- `NETWORK_ERROR`
-- `DNS_ERROR`
-
-### 管理面板 API
-
-**`POST /api/admin/login`**
-
-管理员登录，需提供 `accessKey` 和 Turnstile token。
-
-**`GET /api/admin/users`**
-
-获取所有用户列表及其基本信息。
-
-**`GET /api/admin/metrics/logins`**
-
-获取用户登录记录（支持分页和时间范围过滤）。
-
-**`GET /api/admin/metrics/ai-usage`**
-
-获取 AI 使用统计（Token 消耗、请求次数等）。
-
-**`GET /api/admin/chats/:userId`**
-
-获取指定用户的所有聊天会话列表。
-
-**`GET /api/admin/chats/:userId/:articleId/:conversationId`**
-
-获取指定用户的特定会话详细内容。
-
-**`POST /api/admin/users`**
-
-添加新用户（需提供 userId、accessKey 和 provider 配置）。
-
-**`DELETE /api/admin/users/:userId`**
-
-删除用户及其所有关联数据（会话、偏好、提示词、聊天记录、指标）。
-
-**`POST /api/admin/refresh-all`**
-
-强制刷新所有用户的聊天、登录与 AI 用量缓存数据。
-
-## 手动测试清单
-
-### 用户功能
-- [ ] 登录/登出（含 Turnstile）
-- [ ] 上传/读取/删除文章（含中文文件名）
-- [ ] 文件列表增量更新（无多余全量刷新）
-- [ ] 提示词列表读取与保存
-- [ ] 创建/追加/清空/删除对话
-- [ ] SQLite 聊天持久化与旧 JSON 迁移
-- [ ] SSE 流式响应（含超时和错误场景）
-- [ ] 连通性检查（成功/鉴权失败/限流/超时）
-- [ ] TTS 朗读（Edge 正常 + Edge 失败回退本地语音）
-- [ ] CET 词汇标注开关
-- [ ] 思维导图渲染、折叠、缩放、全屏
-- [ ] 偏好设置去重保存（无重复落盘）
-
-### 管理面板功能
-- [ ] 管理员登录（独立于用户登录）
-- [ ] 用户在线添加（userId、accessKey、provider 配置）
-- [ ] 用户删除与关联数据清理（会话、偏好、提示词、聊天记录、指标）
-- [ ] 用户列表展示（userId、最后登录时间、AI 使用量）
-- [ ] 登录记录查看（时间、用户、分页）
-- [ ] AI 使用统计（Token 消耗、请求次数、成功率、成本统计）
-- [ ] 用户聊天历史查看（文章列表、会话列表）
-- [ ] 会话详情展示（折叠/展开、滚动行为）
-- [ ] 全量数据刷新（一键刷新所有用户的聊天、登录与 AI 用量缓存）
-- [ ] 历史数据加载（跨天统计）
-
-## 维护提示
-
-- 修改前端静态资源后，请同步更新：
-  - `public/index.html` 中脚本 `?v=` 参数
-  - `public/js/main.js` 中 `MODULE_VERSION`
-- 若新增懒加载功能模块，请在 `public/js/main.js` 中同步注册 `registerFeatureLoader`
-
-## 许可证
-
-MIT
+项目使用 MIT License，见：[LICENSE](/Users/wangchengan/Documents/Coding/reading-helper/LICENSE)
