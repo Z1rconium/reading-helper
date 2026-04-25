@@ -2,21 +2,11 @@ let appRef = null;
 let speechSynthesisUtterance = null;
 let currentAudio = null;
 let isPlayingQueue = false;
-let voicesLoaded = false;
 
 const ttsEndpoint = '/api/tts';
-const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
 function setup(app) {
   appRef = app;
-
-  if (isSafari && 'speechSynthesis' in window) {
-    loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-  } else if (isSafari) {
-    appRef.dom.readAloudBtn.disabled = true;
-    appRef.dom.readAloudBtn.title = '您的浏览器不支持语音朗读功能';
-  }
 }
 
 function getSelectedVoiceName() {
@@ -288,14 +278,6 @@ async function playWithEdgeTts(text, options = {}) {
   playNext();
 }
 
-function loadVoices() {
-  if (voicesLoaded) return;
-  const voices = window.speechSynthesis.getVoices();
-  if (voices.length > 0) {
-    voicesLoaded = true;
-  }
-}
-
 function stopPlayback() {
   if (currentAudio) {
     currentAudio.pause();
@@ -328,46 +310,30 @@ async function handleReadAloudClick() {
   const volume = parseFloat(appRef.dom.speechVolumeInput.value) || 1.0;
   const pitch = parseFloat(appRef.dom.speechPitchInput.value) || 1.0;
 
-  if (!isSafari) {
-    try {
-      await playWithEdgeTts(currentSelection, {
-        voice: selectedVoice,
-        rate,
-        volume,
-        pitch
-      });
-    } catch (error) {
-      isPlayingQueue = false;
-      clearAudioCache();
-      resetReadAloudButton();
-      try {
-        appRef.addSystemMessage('edge-tts 服务暂不可用，已自动切换到本地语音库');
-        await speakWithNativeTts(currentSelection, {
-          edgeVoiceName: selectedVoice,
-          rate,
-          volume,
-          pitch,
-          localOnly: true
-        });
-      } catch (fallbackError) {
-        resetReadAloudButton();
-        appRef.addSystemMessage(`朗读失败: ${fallbackError.message}`);
-      }
-    }
-    return;
-  }
-
   try {
-    await speakWithNativeTts(currentSelection, {
-      edgeVoiceName: selectedVoice,
+    await playWithEdgeTts(currentSelection, {
+      voice: selectedVoice,
       rate,
       volume,
-      pitch,
-      localOnly: false
+      pitch
     });
   } catch (error) {
-    appRef.addSystemMessage(`朗读失败: ${error.message}`);
+    isPlayingQueue = false;
+    clearAudioCache();
     resetReadAloudButton();
+    try {
+      appRef.addSystemMessage('edge-tts 服务暂不可用，已自动切换到本地语音库');
+      await speakWithNativeTts(currentSelection, {
+        edgeVoiceName: selectedVoice,
+        rate,
+        volume,
+        pitch,
+        localOnly: true
+      });
+    } catch (fallbackError) {
+      resetReadAloudButton();
+      appRef.addSystemMessage(`朗读失败: ${fallbackError.message}`);
+    }
   }
 }
 
