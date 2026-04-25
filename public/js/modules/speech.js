@@ -174,7 +174,10 @@ async function requestEdgeTtsAudio(text, options = {}) {
   }
 
   const audioBlob = await response.blob();
-  return URL.createObjectURL(audioBlob);
+  return {
+    audioUrl: URL.createObjectURL(audioBlob),
+    upstream: response.headers.get('X-TTS-Upstream') || 'primary'
+  };
 }
 
 async function playWithEdgeTts(text, options = {}) {
@@ -197,16 +200,70 @@ async function playWithEdgeTts(text, options = {}) {
   window.audioCache = audioCache;
   let activeFetches = 0;
   let isPlaying = false;
+  let backupNoticeShown = false;
+  let localFallbackStarted = false;
+
+  const announceBackupFallback = () => {
+    if (backupNoticeShown) {
+      return;
+    }
+    backupNoticeShown = true;
+    appRef.addSystemMessage('主 edge-tts 服务不可用，已自动切换到备用朗读服务');
+  };
+
+  const fallbackToNativeFromSentence = async (startIndex) => {
+    if (localFallbackStarted) {
+      return;
+    }
+    localFallbackStarted = true;
+
+    const remainingText = sentences
+      .slice(startIndex)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean)
+      .join(' ');
+
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+      currentAudio = null;
+    }
+
+    isPlayingQueue = false;
+    clearAudioCache();
+    resetReadAloudButton();
+
+    if (!remainingText) {
+      return;
+    }
+
+    try {
+      appRef.addSystemMessage('主备 edge-tts 服务均不可用，已自动切换到本地语音库');
+      await speakWithNativeTts(remainingText, {
+        edgeVoiceName: voice,
+        rate,
+        volume,
+        pitch,
+        localOnly: true
+      });
+    } catch (fallbackError) {
+      resetReadAloudButton();
+      appRef.addSystemMessage(`朗读失败: ${fallbackError.message}`);
+    }
+  };
 
   const firstSentence = sentences[0]?.trim();
   if (!firstSentence) {
     throw new Error('没有可朗读文本');
   }
-  const firstAudioUrl = await requestEdgeTtsAudio(firstSentence, { voice, rate, volume, pitch });
-  audioCache.set(0, firstAudioUrl);
+  const firstAudioResult = await requestEdgeTtsAudio(firstSentence, { voice, rate, volume, pitch });
+  if (firstAudioResult.upstream === 'backup') {
+    announceBackupFallback();
+  }
+  audioCache.set(0, firstAudioResult.audioUrl);
 
   const playNext = async () => {
-    if (!isPlayingQueue || playIndex >= sentences.length || isPlaying) {
+    if (!isPlayingQueue || playIndex >= sentences.length || isPlaying || localFallbackStarted) {
       if (playIndex >= sentences.length) {
         isPlayingQueue = false;
         clearAudioCache();
@@ -229,10 +286,12 @@ async function playWithEdgeTts(text, options = {}) {
     currentAudio = new Audio(audioUrl);
     currentAudio.onended = () => {
       isPlaying = false;
+      currentAudio = null;
       playNext();
     };
     currentAudio.onerror = () => {
       isPlaying = false;
+      currentAudio = null;
       playNext();
     };
 
@@ -240,12 +299,13 @@ async function playWithEdgeTts(text, options = {}) {
       await currentAudio.play();
     } catch (error) {
       isPlaying = false;
+      currentAudio = null;
       playNext();
     }
   };
 
   const fetchAudio = async (index) => {
-    if (index >= sentences.length || !isPlayingQueue) return;
+    if (index >= sentences.length || !isPlayingQueue || localFallbackStarted) return;
 
     activeFetches += 1;
     try {
@@ -254,19 +314,24 @@ async function playWithEdgeTts(text, options = {}) {
         audioCache.set(index, null);
         return;
       }
-      const audioUrl = await requestEdgeTtsAudio(sentenceText, { voice, rate, volume, pitch });
-      audioCache.set(index, audioUrl);
+      const audioResult = await requestEdgeTtsAudio(sentenceText, { voice, rate, volume, pitch });
+      if (audioResult.upstream === 'backup') {
+        announceBackupFallback();
+      }
+      if (!isPlayingQueue || localFallbackStarted) {
+        URL.revokeObjectURL(audioResult.audioUrl);
+        return;
+      }
+      audioCache.set(index, audioResult.audioUrl);
       if (index === playIndex && !isPlaying) {
         playNext();
       }
     } catch (error) {
       audioCache.set(index, null);
-      if (index === playIndex && !isPlaying) {
-        playNext();
-      }
+      await fallbackToNativeFromSentence(Math.min(index, playIndex));
     } finally {
       activeFetches -= 1;
-      if (sentenceIndex < sentences.length && activeFetches < maxConcurrent) {
+      if (!localFallbackStarted && sentenceIndex < sentences.length && activeFetches < maxConcurrent) {
         fetchAudio(sentenceIndex++);
       }
     }
@@ -322,7 +387,7 @@ async function handleReadAloudClick() {
     clearAudioCache();
     resetReadAloudButton();
     try {
-      appRef.addSystemMessage('edge-tts 服务暂不可用，已自动切换到本地语音库');
+      appRef.addSystemMessage('主备 edge-tts 服务均不可用，已自动切换到本地语音库');
       await speakWithNativeTts(currentSelection, {
         edgeVoiceName: selectedVoice,
         rate,

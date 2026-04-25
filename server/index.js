@@ -106,6 +106,26 @@ const EDGE_TTS_ENDPOINT = (() => {
   }
 })();
 
+const EDGE_TTS_ENDPOINT_BACKUP = (() => {
+  const value = typeof process.env.EDGE_TTS_ENDPOINT_BACKUP === 'string' ? process.env.EDGE_TTS_ENDPOINT_BACKUP.trim() : '';
+  if (!value) {
+    return '';
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('EDGE_TTS_ENDPOINT_BACKUP 必须使用 http 或 https 协议');
+    }
+    return value;
+  } catch (error) {
+    if (error.message === 'EDGE_TTS_ENDPOINT_BACKUP 必须使用 http 或 https 协议') {
+      throw error;
+    }
+    throw new Error(`EDGE_TTS_ENDPOINT_BACKUP 不是有效 URL: ${error.message}`);
+  }
+})();
+
+
 const aiUpstreamDispatcher = new UndiciAgent({
   connections: AI_UPSTREAM_CONCURRENCY_LIMIT,
   pipelining: 1,
@@ -204,6 +224,65 @@ const httpAgent = new http.Agent({
   timeout: 60000
 });
 
+function getTtsAgent(endpoint) {
+  return endpoint.startsWith('https') ? httpsAgent : httpAgent;
+}
+
+async function requestTtsUpstream(endpoint, payload, signal) {
+  const upstreamResponse = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'audio/mpeg, audio/*, application/octet-stream'
+    },
+    body: JSON.stringify(payload),
+    signal,
+    agent: getTtsAgent(endpoint)
+  });
+
+  if (!upstreamResponse.ok) {
+    const errorText = await upstreamResponse.text();
+    const error = new Error(errorText || `TTS 上游请求失败: ${upstreamResponse.status}`);
+    error.statusCode = upstreamResponse.status;
+    throw error;
+  }
+
+  return upstreamResponse;
+}
+
+async function requestTtsWithFailover(payload, isClientClosed = () => false) {
+  const endpoints = [EDGE_TTS_ENDPOINT, EDGE_TTS_ENDPOINT_BACKUP].filter(Boolean);
+  let lastError = null;
+
+  for (let index = 0; index < endpoints.length; index += 1) {
+    if (isClientClosed()) {
+      throw createAbortError();
+    }
+
+    const endpoint = endpoints[index];
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TTS_REQUEST_TIMEOUT_MS);
+
+    try {
+      const upstreamResponse = await requestTtsUpstream(endpoint, payload, controller.signal);
+      clearTimeout(timeout);
+      return {
+        upstreamResponse,
+        usedBackup: index > 0,
+        abortUpstream: () => controller.abort()
+      };
+    } catch (error) {
+      clearTimeout(timeout);
+      lastError = error;
+      if (error.name === 'AbortError' && isClientClosed()) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error('TTS 请求失败');
+}
+
 // CET词表缓存
 let cetWordListCache = null;
 
@@ -245,10 +324,10 @@ function buildConnectSrcDirective() {
     'https://cdn.jsdelivr.net',
     'https://challenges.cloudflare.com'
   ];
-  const ttsOrigin = getUrlOrigin(EDGE_TTS_ENDPOINT);
-  if (ttsOrigin) {
-    sources.push(ttsOrigin);
-  }
+  const ttsOrigins = [EDGE_TTS_ENDPOINT, EDGE_TTS_ENDPOINT_BACKUP]
+    .map(getUrlOrigin)
+    .filter(Boolean);
+  sources.push(...ttsOrigins);
   return Array.from(new Set(sources)).join(' ');
 }
 
@@ -1954,44 +2033,28 @@ async function bootstrap() {
       return res.status(400).json({ error: 'voice 不能为空' });
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TTS_REQUEST_TIMEOUT_MS);
+    let clientClosed = false;
 
     try {
-      const upstreamResponse = await fetch(EDGE_TTS_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'audio/mpeg, audio/*, application/octet-stream'
-        },
-        body: JSON.stringify({ text, voice, rate, volume, pitch }),
-        signal: controller.signal,
-        agent: EDGE_TTS_ENDPOINT.startsWith('https') ? httpsAgent : httpAgent
-      });
+      const { upstreamResponse, usedBackup, abortUpstream } = await requestTtsWithFailover(
+        { text, voice, rate, volume, pitch },
+        () => clientClosed || res.destroyed
+      );
 
-      if (!upstreamResponse.ok) {
-        const errorText = await upstreamResponse.text();
-        return res.status(upstreamResponse.status).json({
-          error: errorText || `TTS 上游请求失败: ${upstreamResponse.status}`
-        });
-      }
-
-      // 流式转发：边接收边发送，零内存缓冲
       res.setHeader('Content-Type', upstreamResponse.headers.get('content-type') || 'audio/mpeg');
       const contentLength = upstreamResponse.headers.get('content-length');
       if (contentLength) {
         res.setHeader('Content-Length', contentLength);
       }
       res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-TTS-Upstream', usedBackup ? 'backup' : 'primary');
 
-      // 将 Web ReadableStream 转换为 Node.js Readable 并管道传输
       const { Readable } = require('stream');
       const nodeStream = Readable.fromWeb(upstreamResponse.body);
 
       nodeStream.pipe(res);
 
-      // 处理流错误
-      nodeStream.on('error', (err) => {
+      nodeStream.on('error', () => {
         if (!res.headersSent) {
           res.status(502).json({ error: 'TTS 流传输失败' });
         } else {
@@ -1999,9 +2062,9 @@ async function bootstrap() {
         }
       });
 
-      // 客户端断开连接时中止上游请求
       res.on('close', () => {
-        controller.abort();
+        clientClosed = true;
+        abortUpstream();
         nodeStream.destroy();
       });
 
@@ -2009,9 +2072,7 @@ async function bootstrap() {
       if (error.name === 'AbortError') {
         return res.status(504).json({ error: 'TTS 请求超时，请稍后重试' });
       }
-      return res.status(502).json({ error: error.message || 'TTS 请求失败' });
-    } finally {
-      clearTimeout(timeout);
+      return res.status(error.statusCode || 502).json({ error: error.message || 'TTS 请求失败' });
     }
   });
 
